@@ -232,7 +232,7 @@ def test_create_rejects_full_url_pattern_422(tmp_path):
         resp = client.post(
             "/api/rules",
             headers=AUTH,
-            json={"pattern": "https://borneo.lc/path", "instance_id": "prox"},
+            json={"pattern": "https://alpha.example.lc/path", "instance_id": "prox"},
         )
         assert resp.status_code == 422
         # Nothing stored.
@@ -246,7 +246,7 @@ def test_create_rejects_unknown_instance_422(tmp_path):
         _seed_instance(db_path, "main")
         resp = client.post(
             "/api/rules", headers=AUTH,
-            json={"pattern": "borneo.lc", "instance_id": "ghost"},
+            json={"pattern": "alpha.example.lc", "instance_id": "ghost"},
         )
         assert resp.status_code == 422
 
@@ -269,14 +269,14 @@ def test_rule_to_revoked_rejected_but_x_to_main_stays_valid(tmp_path):
         # Target is revoked => rejected like an unknown instance.
         r = client.post(
             "/api/rules", headers=AUTH,
-            json={"pattern": "borneo.lc", "instance_id": "prox"},
+            json={"pattern": "alpha.example.lc", "instance_id": "prox"},
         )
         assert r.status_code == 422
         # X -> main (no active main row) is NOT rejected: the target validates (whatever
         # confirm gating follows is orthogonal — a 422 would mean the target was refused).
         r2 = client.post(
             "/api/rules", headers=AUTH,
-            json={"pattern": "borneo.lc", "instance_id": "main"},
+            json={"pattern": "alpha.example.lc", "instance_id": "main"},
         )
         assert r2.status_code != 422
 
@@ -292,11 +292,11 @@ def test_only_relocations_still_requires_confirm(tmp_path):
     with TestClient(app) as client:
         _seed_rule(db_path, "example.com", "prox")      # existing rule (non-empty)
         ws_main = _connect_fresh(
-            client, db_path, "main", tabs=[_tab(1, "https://grafana.lc/")]
+            client, db_path, "main", tabs=[_tab(1, "https://grafana.example.lc/")]
         )
         ws_prox = _connect_fresh(client, db_path, "prox", session="sess-2", tabs=[])
         try:
-            body = {"pattern": "grafana.lc", "instance_id": "prox"}
+            body = {"pattern": "grafana.example.lc", "instance_id": "prox"}
             resp = client.post("/api/rules", headers=AUTH, json=body)
             assert resp.status_code == 409                  # gated
             payload = resp.json()
@@ -356,7 +356,7 @@ def test_delete_last_rule_is_gated_even_with_zero_modeled_impact(tmp_path):
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         _seed_instance(db_path, "prox")
-        rid = _seed_rule(db_path, "grafana.lc", "prox")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox")
 
         resp = client.delete(f"/api/rules/{rid}", headers=AUTH)
         assert resp.status_code == 409
@@ -375,10 +375,10 @@ def test_delete_gated_drains_held_tabs(tmp_path):
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
-        rid = _seed_rule(db_path, "grafana.lc", "prox")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox")
         _seed_rule(db_path, "other.com", "prox")            # 2nd rule => drain stays on
         ws_prox = _connect_fresh(
-            client, db_path, "prox", tabs=[_tab(1, "https://grafana.lc/")]
+            client, db_path, "prox", tabs=[_tab(1, "https://grafana.example.lc/")]
         )
         ws_main = _connect_fresh(client, db_path, "main", session="sess-2", tabs=[])
         try:
@@ -399,16 +399,16 @@ def test_preview_counts_dedupe_closure_separately(tmp_path):
         # prox already holds the exact same full URL => the main tab is a dedupe
         # CLOSURE at the source, not a relocation.
         ws_prox = _connect_fresh(
-            client, db_path, "prox", tabs=[_tab(1, "https://grafana.lc/")]
+            client, db_path, "prox", tabs=[_tab(1, "https://grafana.example.lc/")]
         )
         ws_main = _connect_fresh(
             client, db_path, "main", session="sess-2",
-            tabs=[_tab(2, "https://grafana.lc/")],
+            tabs=[_tab(2, "https://grafana.example.lc/")],
         )
         try:
             resp = client.post(
                 "/api/rules/preview", headers=AUTH,
-                json={"pattern": "grafana.lc", "instance_id": "prox"},
+                json={"pattern": "grafana.example.lc", "instance_id": "prox"},
             )
             assert resp.status_code == 200
             payload = resp.json()
@@ -500,7 +500,7 @@ def test_preview_requests_snapshot_to_count(tmp_path):
             def _do_preview():
                 holder["resp"] = client.post(
                     "/api/rules/preview", headers=AUTH,
-                    json={"pattern": "grafana.lc", "instance_id": "prox",
+                    json={"pattern": "grafana.example.lc", "instance_id": "prox",
                           "singleton": True},
                 )
 
@@ -508,8 +508,8 @@ def test_preview_requests_snapshot_to_count(tmp_path):
                 req = _recv(ws)             # preview's snapshot_request
                 if req.get("type") == "snapshot_request":
                     ws.send_json(_snapshot(req["id"], [
-                        _tab(1, "https://grafana.lc/a"),
-                        _tab(2, "https://grafana.lc/b"),
+                        _tab(1, "https://grafana.example.lc/a"),
+                        _tab(2, "https://grafana.example.lc/b"),
                     ]))
 
             answerer = threading.Thread(target=_answer, daemon=True)
@@ -567,13 +567,13 @@ def test_singleton_survivor_example_follows_ladder(tmp_path):
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         ws = _connect_fresh(client, db_path, "prox", tabs=[
-            _tab(1, "https://grafana.lc/a", title="A", age_ms=5_000_000),  # older loses
-            _tab(2, "https://grafana.lc/b", title="B", age_ms=4_000_000),  # newer wins
+            _tab(1, "https://grafana.example.lc/a", title="A", age_ms=5_000_000),  # older loses
+            _tab(2, "https://grafana.example.lc/b", title="B", age_ms=4_000_000),  # newer wins
         ])
         try:
             resp = client.post(
                 "/api/rules/preview", headers=AUTH,
-                json={"pattern": "grafana.lc", "instance_id": "prox",
+                json={"pattern": "grafana.example.lc", "instance_id": "prox",
                       "singleton": True},
             )
             assert resp.status_code == 200
@@ -596,7 +596,7 @@ def test_get_one_rule_matches_the_list_element(tmp_path):
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         _seed_instance(db_path, "prox")
-        rid = _seed_rule(db_path, "grafana.lc", "prox", singleton=1)
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox", singleton=1)
         listed = client.get("/api/rules", headers=AUTH).json()["rules"]
         one = client.get(f"/api/rules/{rid}", headers=AUTH)
         assert one.status_code == 200
@@ -624,13 +624,13 @@ def test_reset_navigates_survivor_and_journals_it(tmp_path):
     db_path = str(tmp_path / "curator.db")
     now = _now_ms()
     with TestClient(app) as client:
-        rid = _seed_rule(db_path, "grafana.lc", "prox", singleton=1)
-        _set_canonical(db_path, rid, "https://grafana.lc/home")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox", singleton=1)
+        _set_canonical(db_path, rid, "https://grafana.example.lc/home")
         ws = _connect_fresh(
             client, db_path, "prox",
             tabs=[
-                _tab(1, "https://grafana.lc/a", age_ms=OLD * 2),   # older -> loses
-                _tab(2, "https://grafana.lc/b", age_ms=OLD),       # survivor
+                _tab(1, "https://grafana.example.lc/a", age_ms=OLD * 2),   # older -> loses
+                _tab(2, "https://grafana.example.lc/b", age_ms=OLD),       # survivor
             ],
         )
         try:
@@ -640,13 +640,13 @@ def test_reset_navigates_survivor_and_journals_it(tmp_path):
             assert cmd["type"] == "command"
             assert cmd["command"] == "navigate_tab"
             assert cmd["sessionId"] == "sess-1"            # §5 session stamped
-            assert cmd["params"] == {"tabId": 2, "url": "https://grafana.lc/home"}
+            assert cmd["params"] == {"tabId": 2, "url": "https://grafana.example.lc/home"}
             ws.send_json({"type": "response", "id": cmd["id"], "ok": True, "result": {}})
             resp = fut.result(timeout=5)
             assert resp.status_code == 200
             body = resp.json()
             assert body["reset"] is True and body["tab_id"] == 2
-            assert body["canonical_url"] == "https://grafana.lc/home"
+            assert body["canonical_url"] == "https://grafana.example.lc/home"
 
             row = _db_row(
                 db_path,
@@ -654,7 +654,7 @@ def test_reset_navigates_survivor_and_journals_it(tmp_path):
                 "detail FROM actions WHERE kind='reset'",
             )
             assert row == ("reset", "done", "user", "prox", 2, rid,
-                           "https://grafana.lc/home", "https://grafana.lc/b")
+                           "https://grafana.example.lc/home", "https://grafana.example.lc/b")
             assert _db_row(db_path, "SELECT COUNT(*) FROM actions") == (1,)
             assert row[0] and now  # the row is the pass-free manual action (no pass_id)
             assert _db_row(
@@ -671,8 +671,8 @@ def test_reset_with_no_tabs_is_not_an_error(tmp_path):
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
-        rid = _seed_rule(db_path, "grafana.lc", "prox")
-        _set_canonical(db_path, rid, "https://grafana.lc/home")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox")
+        _set_canonical(db_path, rid, "https://grafana.example.lc/home")
         ws = _connect_fresh(client, db_path, "prox", tabs=[_tab(1, "https://other.io/x")])
         try:
             resp = client.post(f"/api/rules/{rid}/reset", headers=AUTH)
@@ -691,8 +691,8 @@ def test_reset_refuses_disconnected_instance_and_missing_rule(tmp_path):
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         _seed_instance(db_path, "prox", connected=0)
-        rid = _seed_rule(db_path, "grafana.lc", "prox")
-        _set_canonical(db_path, rid, "https://grafana.lc/home")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox")
+        _set_canonical(db_path, rid, "https://grafana.example.lc/home")
         assert client.post(f"/api/rules/{rid}/reset", headers=AUTH).status_code == 409
 
         bare = _seed_rule(db_path, "other.io", "prox")          # no canonical_url
@@ -708,8 +708,8 @@ def test_reset_refused_while_paused(tmp_path):
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         _seed_instance(db_path, "prox")
-        rid = _seed_rule(db_path, "grafana.lc", "prox")
-        _set_canonical(db_path, rid, "https://grafana.lc/home")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox")
+        _set_canonical(db_path, rid, "https://grafana.example.lc/home")
         _set_setting(db_path, "curator_stopped_at", str(_now_ms()))
         resp = client.post(f"/api/rules/{rid}/reset", headers=AUTH)
         assert resp.status_code == 423
@@ -729,10 +729,10 @@ def test_reset_failure_is_journaled(tmp_path):
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
-        rid = _seed_rule(db_path, "grafana.lc", "prox")
-        _set_canonical(db_path, rid, "https://grafana.lc/home")
+        rid = _seed_rule(db_path, "grafana.example.lc", "prox")
+        _set_canonical(db_path, rid, "https://grafana.example.lc/home")
         ws = _connect_fresh(
-            client, db_path, "prox", tabs=[_tab(1, "https://grafana.lc/a")]
+            client, db_path, "prox", tabs=[_tab(1, "https://grafana.example.lc/a")]
         )
         try:
             pool = ThreadPoolExecutor(1)
@@ -782,7 +782,7 @@ def test_preview_waits_for_a_pass_snapshot_instead_of_clobbering_it(tmp_path):
             def _do_preview():
                 holder["resp"] = client.post(
                     "/api/rules/preview", headers=AUTH,
-                    json={"pattern": "grafana.lc", "instance_id": "prox",
+                    json={"pattern": "grafana.example.lc", "instance_id": "prox",
                           "singleton": True},
                 )
 
@@ -794,8 +794,8 @@ def test_preview_waits_for_a_pass_snapshot_instead_of_clobbering_it(tmp_path):
             # The instance answers the PASS's id: it stays in the pass, and preview gets
             # the fresh mirror it was waiting for.
             ws.send_json(_snapshot("pass-abc", [
-                _tab(1, "https://grafana.lc/a"),
-                _tab(2, "https://grafana.lc/b"),
+                _tab(1, "https://grafana.example.lc/a"),
+                _tab(2, "https://grafana.example.lc/b"),
             ], session="sess-1"))
             previewer.join(timeout=8)
             assert not previewer.is_alive(), "preview did not return"
@@ -861,11 +861,11 @@ def test_canonical_url_is_validated_on_save(tmp_path):
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         _seed_instance(db_path, "prox")
-        for bad in ("data:text/html,x", "javascript:alert(1)", "grafana.lc/home",
+        for bad in ("data:text/html,x", "javascript:alert(1)", "grafana.example.lc/home",
                     "file:///etc/passwd", "https://", 42):
             r = client.post(
                 "/api/rules", headers=AUTH,
-                json={"pattern": "grafana.lc", "instance_id": "prox",
+                json={"pattern": "grafana.example.lc", "instance_id": "prox",
                       "canonical_url": bad, "confirm_impact": True},
             )
             assert r.status_code == 422, f"{bad!r} was accepted"
@@ -875,13 +875,13 @@ def test_canonical_url_is_validated_on_save(tmp_path):
         # has no reset target).
         ok = client.post(
             "/api/rules", headers=AUTH,
-            json={"pattern": "grafana.lc", "instance_id": "prox", "confirm_impact": True},
+            json={"pattern": "grafana.example.lc", "instance_id": "prox", "confirm_impact": True},
         )
         assert ok.status_code == 201
         # …and a real URL is accepted.
         rid = ok.json()["id"]
         assert client.put(
             f"/api/rules/{rid}", headers=AUTH,
-            json={"pattern": "grafana.lc", "instance_id": "prox",
-                  "canonical_url": "https://grafana.lc/home", "confirm_impact": True},
+            json={"pattern": "grafana.example.lc", "instance_id": "prox",
+                  "canonical_url": "https://grafana.example.lc/home", "confirm_impact": True},
         ).status_code == 200

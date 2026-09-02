@@ -15,7 +15,7 @@ Semantics, verbatim from §8:
   pattern matches ANY port; a missing path prefix matches ANY path.
 * ``hostPattern`` is matched against the WHOLE hostname, anchored (full string):
   ``*`` → ``.*``, every other regex metachar escaped. There is NO partial match —
-  ``borneo.lc`` matches neither ``evil-borneo.lc`` nor ``x.borneo.lc``. A path prefix,
+  ``alpha.example.lc`` matches neither ``evil-alpha.example.lc`` nor ``x.alpha.example.lc``. A path prefix,
   if present, restricts to a SEGMENT-boundary prefix of the URL path (case-sensitive):
   ``github.com/wirenboard`` matches ``/wirenboard`` and ``/wirenboard/repo`` but not
   ``/wirenboardXYZ``. Without a prefix the path is irrelevant to matching.
@@ -23,7 +23,7 @@ Semantics, verbatim from §8:
   beats a missing port; (b) a longer path prefix; (c) more characters in
   ``hostPattern`` excluding ``*``; (d) smaller ``rules.id``.
 * Validation happens at save, not as an exception during a pass: a pattern that
-  does not parse (e.g. a full URL ``https://borneo.lc/path``) is rejected; a stored
+  does not parse (e.g. a full URL ``https://alpha.example.lc/path``) is rejected; a stored
   rule that stops compiling is excluded from matching (``invalid=1``) but never
   crashes a pass.
 """
@@ -80,7 +80,7 @@ def normalize_target(url: str | None) -> tuple[str, int, str] | None:
     host = parts.hostname  # urlsplit already lowercases and strips IPv6 brackets
     if not host:
         return None
-    # Strip a trailing FQDN dot ("borneo.lc." => "borneo.lc") BEFORE idna: an empty
+    # Strip a trailing FQDN dot ("alpha.example.lc." => "alpha.example.lc") BEFORE idna: an empty
     # trailing label would make the idna codec raise.
     if host.endswith("."):
         host = host[:-1]
@@ -123,7 +123,7 @@ def _to_ascii_host(host: str) -> str | None:
 def compile_pattern(pattern: str) -> CompiledPattern:
     """Compile a ``hostPattern[:port][/prefix]`` pattern; raise :class:`InvalidPattern`.
 
-    Only this grammar is accepted. A scheme (``https://borneo.lc``), a query/fragment,
+    Only this grammar is accepted. A scheme (``https://alpha.example.lc``), a query/fragment,
     whitespace, an empty host, or a non-numeric / out-of-range port are all rejected —
     that is the "validation at save" of §8. An optional path prefix is now allowed:
     ``github.com/wirenboard`` restricts the rule to URLs whose path starts, on a
@@ -141,14 +141,14 @@ def compile_pattern(pattern: str) -> CompiledPattern:
     if "://" in pattern:
         raise InvalidPattern(
             f"pattern looks like a full URL (contains a scheme '://'); "
-            "enter only a host pattern like 'borneo.lc' or 'github.com/wirenboard'"
+            "enter only a host pattern like 'alpha.example.lc' or 'github.com/wirenboard'"
         )
     # A query/fragment still means a full URL was pasted; the path is now allowed.
     for bad in ("?", "#"):
         if bad in pattern:
             raise InvalidPattern(
                 f"pattern looks like a URL (contains {bad!r}); "
-                "enter only a host pattern like 'borneo.lc' or 'github.com/wirenboard'"
+                "enter only a host pattern like 'alpha.example.lc' or 'github.com/wirenboard'"
             )
 
     # Split the path prefix off FIRST, before host:port parsing — so a bracketed IPv6
@@ -254,8 +254,8 @@ def _host_pattern_to_ascii(host_part: str) -> str:
 def _host_pattern_regex(host_for_regex: str) -> re.Pattern:
     # '*' → '.*', everything else escaped. NO '^'/'$' anchors: matching uses
     # `fullmatch` (below), which anchors BOTH ends against the whole string. `$`
-    # would match just BEFORE a trailing '\n', so `re.compile('^borneo\\.lc$')`
-    # accepts "borneo.lc\n" — a partial match §8 forbids. `fullmatch` (equivalently
+    # would match just BEFORE a trailing '\n', so `re.compile('^alpha\\.example\\.lc$')`
+    # accepts "alpha.example.lc\n" — a partial match §8 forbids. `fullmatch` (equivalently
     # `\Z`) has no such newline hole, so a hostname with a stray trailing newline
     # can never sneak past the anchor.
     parts = [re.escape(p) for p in host_for_regex.split("*")]

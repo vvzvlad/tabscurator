@@ -453,7 +453,7 @@ async def test_merge_journal_excludes_tabs_closed_by_the_same_pass(tmp_path):
     try:
         await db.write(lambda c: c.execute(
             "INSERT INTO rules (pattern, instance_id, singleton, invalid, created_at) "
-            "VALUES ('grafana.lc', 'prox', 0, 0, 0)"))
+            "VALUES ('grafana.example.lc', 'prox', 0, 0, 0)"))
         ext = _Ext(db)
         # media: window 1 = two unruled tabs (target), window 2 = the ruled tab 20 plus
         # an unruled 21 (source). Tie on tab count => target is the smaller id, 1.
@@ -462,7 +462,7 @@ async def test_merge_journal_excludes_tabs_closed_by_the_same_pass(tmp_path):
             tabs=[
                 _tabinfo(10, window_id=1, url="https://a/"),
                 _tabinfo(11, window_id=1, url="https://b/"),
-                _tabinfo(20, window_id=2, url="https://grafana.lc/d/x"),
+                _tabinfo(20, window_id=2, url="https://grafana.example.lc/d/x"),
                 _tabinfo(21, window_id=2, url="https://c/"),
             ],
             windows=[
@@ -474,7 +474,7 @@ async def test_merge_journal_excludes_tabs_closed_by_the_same_pass(tmp_path):
         # prox already holds the identical url => main:20 is a dedupe_close, not a move.
         await ext.add_instance(
             "prox",
-            tabs=[_tabinfo(99, window_id=1, url="https://grafana.lc/d/x")],
+            tabs=[_tabinfo(99, window_id=1, url="https://grafana.example.lc/d/x")],
             windows=[{"id": 1, "type": "normal", "state": "normal"}],
             focused=None,
         )
@@ -482,7 +482,7 @@ async def test_merge_journal_excludes_tabs_closed_by_the_same_pass(tmp_path):
         def respond(iid, cmd, params):
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/x"}}}
+                                                       "url": "https://grafana.example.lc/d/x"}}}
             if cmd == protocol.CMD_MERGE_WINDOWS:
                 return {"ok": True, "result": {"merged": 1}}
             return {"ok": True, "result": {"ok": True}}

@@ -24,14 +24,14 @@ def match_instance(url, rules):
 
 # --- normalization ----------------------------------------------------------
 def test_normalize_host_lowercase_and_default_ports():
-    assert normalize_target("http://Borneo.LC/a") == ("borneo.lc", 80, "/a")
-    assert normalize_target("https://borneo.lc/a") == ("borneo.lc", 443, "/a")
+    assert normalize_target("http://Alpha.Example.LC/a") == ("alpha.example.lc", 80, "/a")
+    assert normalize_target("https://alpha.example.lc/a") == ("alpha.example.lc", 443, "/a")
     # explicit port overrides the default
-    assert normalize_target("https://borneo.lc:8443/a") == ("borneo.lc", 8443, "/a")
+    assert normalize_target("https://alpha.example.lc:8443/a") == ("alpha.example.lc", 8443, "/a")
 
 
 def test_normalize_strips_trailing_fqdn_dot():
-    assert normalize_target("https://borneo.lc./x")[0] == "borneo.lc"
+    assert normalize_target("https://alpha.example.lc./x")[0] == "alpha.example.lc"
 
 
 def test_normalize_ipv6_bracketless():
@@ -40,70 +40,70 @@ def test_normalize_ipv6_bracketless():
 
 
 def test_normalize_rejects_non_http_and_bad_port():
-    assert normalize_target("ftp://borneo.lc/") is None
+    assert normalize_target("ftp://alpha.example.lc/") is None
     assert normalize_target("file:///etc/passwd") is None
     assert normalize_target("javascript:alert(1)") is None
-    assert normalize_target("http://borneo.lc:99999/") is None  # out of range
+    assert normalize_target("http://alpha.example.lc:99999/") is None  # out of range
     assert normalize_target(None) is None
 
 
 # --- anchored, whole-hostname, no partial (§8) ------------------------------
 def test_anchored_no_partial():
-    rules = [R(1, "borneo.lc", "home")]
-    assert match_instance("https://borneo.lc/", rules) == "home"
+    rules = [R(1, "alpha.example.lc", "home")]
+    assert match_instance("https://alpha.example.lc/", rules) == "home"
     # Path is irrelevant to matching.
-    assert match_instance("https://borneo.lc/a/b/c?q=1#f", rules) == "home"
+    assert match_instance("https://alpha.example.lc/a/b/c?q=1#f", rules) == "home"
     # NO partial match — these must all miss (reddens if the match is not anchored).
-    assert match_instance("https://x.borneo.lc/", rules) is None
-    assert match_instance("https://evil-borneo.lc/", rules) is None
-    assert match_instance("https://borneo.lcx/", rules) is None
+    assert match_instance("https://x.alpha.example.lc/", rules) is None
+    assert match_instance("https://evil-alpha.example.lc/", rules) is None
+    assert match_instance("https://alpha.example.lcx/", rules) is None
 
 
 def test_wildcard():
-    # '*' matches any host; '*.borneo.lc' matches sub-domains but NOT the bare host.
+    # '*' matches any host; '*.alpha.example.lc' matches sub-domains but NOT the bare host.
     assert match_instance("https://anything.example/", [R(1, "*")]) == "i"
-    sub = [R(1, "*.borneo.lc", "home")]
-    assert match_instance("https://a.borneo.lc/", sub) == "home"
-    assert match_instance("https://a.b.borneo.lc/", sub) == "home"
-    assert match_instance("https://borneo.lc/", sub) is None  # no dot before => no match
+    sub = [R(1, "*.alpha.example.lc", "home")]
+    assert match_instance("https://a.alpha.example.lc/", sub) == "home"
+    assert match_instance("https://a.b.alpha.example.lc/", sub) == "home"
+    assert match_instance("https://alpha.example.lc/", sub) is None  # no dot before => no match
 
 
 def test_non_http_never_matches():
-    rules = [R(1, "borneo.lc", "home"), R(2, "*", "any")]
-    assert match_instance("ftp://borneo.lc/", rules) is None
+    rules = [R(1, "alpha.example.lc", "home"), R(2, "*", "any")]
+    assert match_instance("ftp://alpha.example.lc/", rules) is None
     assert match_instance("chrome://settings", rules) is None
 
 
 # --- port specificity (§8a) -------------------------------------------------
 def test_explicit_port_beats_any_port():
     # both match https (port 443); the explicit-port rule is more specific.
-    rules = [R(1, "borneo.lc", "any"), R(2, "borneo.lc:443", "explicit")]
-    assert match_instance("https://borneo.lc/", rules) == "explicit"
+    rules = [R(1, "alpha.example.lc", "any"), R(2, "alpha.example.lc:443", "explicit")]
+    assert match_instance("https://alpha.example.lc/", rules) == "explicit"
     # A wrong explicit port does not match at all; the any-port rule wins.
-    rules2 = [R(1, "borneo.lc", "any"), R(2, "borneo.lc:8443", "explicit")]
-    assert match_instance("https://borneo.lc/", rules2) == "any"
+    rules2 = [R(1, "alpha.example.lc", "any"), R(2, "alpha.example.lc:8443", "explicit")]
+    assert match_instance("https://alpha.example.lc/", rules2) == "any"
 
 
 def test_default_port_fill_80_443():
     # `:80` matches http only; `:443` matches https only (default-port fill).
-    rules = [R(1, "borneo.lc:80", "http80"), R(2, "borneo.lc:443", "https443")]
-    assert match_instance("http://borneo.lc/", rules) == "http80"
-    assert match_instance("https://borneo.lc/", rules) == "https443"
+    rules = [R(1, "alpha.example.lc:80", "http80"), R(2, "alpha.example.lc:443", "https443")]
+    assert match_instance("http://alpha.example.lc/", rules) == "http80"
+    assert match_instance("https://alpha.example.lc/", rules) == "https443"
 
 
 # --- host-char + id ladder (§8b, §8c) ---------------------------------------
 def test_more_host_chars_wins():
-    rules = [R(1, "*.borneo.lc", "wild"), R(2, "x.borneo.lc", "exact")]
+    rules = [R(1, "*.alpha.example.lc", "wild"), R(2, "x.alpha.example.lc", "exact")]
     # exact has more non-'*' chars => more specific, regardless of id order.
-    assert match_instance("https://x.borneo.lc/", rules) == "exact"
+    assert match_instance("https://x.alpha.example.lc/", rules) == "exact"
     # reversed ids: still the char count decides, not the id.
-    rules_rev = [R(1, "x.borneo.lc", "exact"), R(2, "*.borneo.lc", "wild")]
-    assert match_instance("https://x.borneo.lc/", rules_rev) == "exact"
+    rules_rev = [R(1, "x.alpha.example.lc", "exact"), R(2, "*.alpha.example.lc", "wild")]
+    assert match_instance("https://x.alpha.example.lc/", rules_rev) == "exact"
 
 
 def test_smaller_id_breaks_tie():
-    rules = [R(5, "borneo.lc", "five"), R(2, "borneo.lc", "two")]
-    assert match_instance("https://borneo.lc/", rules) == "two"
+    rules = [R(5, "alpha.example.lc", "five"), R(2, "alpha.example.lc", "two")]
+    assert match_instance("https://alpha.example.lc/", rules) == "two"
 
 
 # --- IDN both ways (§8) -----------------------------------------------------
@@ -131,30 +131,30 @@ def test_ipv6_patterns_match():
 
 # --- invalid rules excluded from matching (§8) ------------------------------
 def test_invalid_flag_excluded_from_matching():
-    rules = [R(1, "borneo.lc", "flagged", invalid=1), R(2, "borneo.lc", "ok")]
+    rules = [R(1, "alpha.example.lc", "flagged", invalid=1), R(2, "alpha.example.lc", "ok")]
     # the invalid=1 rule (smaller id) is skipped; the valid one matches.
-    assert match_instance("https://borneo.lc/", rules) == "ok"
+    assert match_instance("https://alpha.example.lc/", rules) == "ok"
     # a single flagged rule => no match at all (reddens if invalid is honored wrongly)
-    assert match_instance("https://borneo.lc/", [R(1, "borneo.lc", "x", invalid=1)]) is None
+    assert match_instance("https://alpha.example.lc/", [R(1, "alpha.example.lc", "x", invalid=1)]) is None
 
 
 def test_uncompilable_stored_pattern_excluded_not_fatal():
     # A stored pattern that no longer parses is skipped defensively, never raised.
-    rules = [R(1, "https://borneo.lc/path", "bad"), R(2, "borneo.lc", "good")]
-    assert match_instance("https://borneo.lc/", rules) == "good"
+    rules = [R(1, "https://alpha.example.lc/path", "bad"), R(2, "alpha.example.lc", "good")]
+    assert match_instance("https://alpha.example.lc/", rules) == "good"
 
 
 # --- validation grammar (§8) ------------------------------------------------
 @pytest.mark.parametrize(
     "bad",
     [
-        "https://borneo.lc/path",  # full URL (scheme rejected)
-        "borneo.lc?q=1",            # query
-        "borneo.lc#f",              # fragment
-        "borneo lc",                # whitespace
+        "https://alpha.example.lc/path",  # full URL (scheme rejected)
+        "alpha.example.lc?q=1",            # query
+        "alpha.example.lc#f",              # fragment
+        "alpha example lc",         # whitespace
         "",                          # empty
-        "borneo.lc:notaport",       # non-numeric port
-        "borneo.lc:99999",          # out-of-range port
+        "alpha.example.lc:notaport",       # non-numeric port
+        "alpha.example.lc:99999",          # out-of-range port
         "[::1",                      # unbalanced bracket
     ],
 )
@@ -164,7 +164,7 @@ def test_validate_pattern_rejects_non_grammar(bad):
 
 
 @pytest.mark.parametrize(
-    "good", ["borneo.lc", "*.borneo.lc", "*", "borneo.lc:8443", "[::1]", "[2001:db8::1]:8080"]
+    "good", ["alpha.example.lc", "*.alpha.example.lc", "*", "alpha.example.lc:8443", "[::1]", "[2001:db8::1]:8080"]
 )
 def test_validate_pattern_accepts_grammar(good):
     compile_pattern(good)  # must not raise

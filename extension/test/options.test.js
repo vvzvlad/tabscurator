@@ -81,9 +81,9 @@ describe("normalizeServiceAddress", () => {
   // scheme was ever acceptable. The scheme is a decision this module makes (it IS the
   // security decision), so it makes it — and only for an address that carries none.
   const NORM = [
-    ["curator.nebula.lc", "wss://curator.nebula.lc"],
-    ["curator.nebula.lc:8443", "wss://curator.nebula.lc:8443"],
-    ["  curator.nebula.lc  ", "wss://curator.nebula.lc"], // trimmed first
+    ["curator.beta.example.lc", "wss://curator.beta.example.lc"],
+    ["curator.beta.example.lc:8443", "wss://curator.beta.example.lc:8443"],
+    ["  curator.beta.example.lc  ", "wss://curator.beta.example.lc"], // trimmed first
     // Loopback keeps the development exception the gate already makes, so a dev
     // service with no certificate is reachable by typing exactly what is in the URL bar.
     ["localhost:8000", "ws://localhost:8000"],
@@ -94,12 +94,12 @@ describe("normalizeServiceAddress", () => {
     // already stored, and the refusals below must keep their reason.
     // ...with ONE exception: https:// is the same TLS on the same host, so it is
     // upgraded rather than refused. This is the address people actually paste.
-    ["https://curator.nebula.lc", "wss://curator.nebula.lc"],
-    ["https://curator.nebula.lc:8443/ext", "wss://curator.nebula.lc:8443/ext"],
-    ["HTTPS://curator.nebula.lc", "wss://curator.nebula.lc"], // scheme case-insensitive
-    ["http://curator.nebula.lc", "http://curator.nebula.lc"], // untouched => still refused
-    ["wss://curator.nebula.lc", "wss://curator.nebula.lc"],
-    ["wss://curator.nebula.lc:8443/ext", "wss://curator.nebula.lc:8443/ext"],
+    ["https://curator.beta.example.lc", "wss://curator.beta.example.lc"],
+    ["https://curator.beta.example.lc:8443/ext", "wss://curator.beta.example.lc:8443/ext"],
+    ["HTTPS://curator.beta.example.lc", "wss://curator.beta.example.lc"], // scheme case-insensitive
+    ["http://curator.beta.example.lc", "http://curator.beta.example.lc"], // untouched => still refused
+    ["wss://curator.beta.example.lc", "wss://curator.beta.example.lc"],
+    ["wss://curator.beta.example.lc:8443/ext", "wss://curator.beta.example.lc:8443/ext"],
     ["ws://curator.lan:8000", "ws://curator.lan:8000"],
     ["http://curator.example", "http://curator.example"],
     ["", ""],
@@ -446,15 +446,15 @@ describe("options: the service address is validated before it is stored (§7)", 
     const { chromeApi, stored } = fakeChrome();
     await init(doc, chromeApi);
 
-    doc.els["service-address"].value = "curator.nebula.lc";
+    doc.els["service-address"].value = "curator.beta.example.lc";
     await doc.els["service-address"]._handlers.change();
-    expect(stored.serviceAddress).toBe("wss://curator.nebula.lc");
-    expect(doc.els["service-address"].value).toBe("wss://curator.nebula.lc");
+    expect(stored.serviceAddress).toBe("wss://curator.beta.example.lc");
+    expect(doc.els["service-address"].value).toBe("wss://curator.beta.example.lc");
     expect(doc.els.status.textContent).toBe("Service address saved");
 
-    doc.els["service-address"].value = "curator.nebula.lc:8443";
+    doc.els["service-address"].value = "curator.beta.example.lc:8443";
     await doc.els["service-address"]._handlers.change();
-    expect(stored.serviceAddress).toBe("wss://curator.nebula.lc:8443");
+    expect(stored.serviceAddress).toBe("wss://curator.beta.example.lc:8443");
 
     // Loopback keeps the ws:// development exception, typed the same bare way.
     doc.els["service-address"].value = "localhost:8000";
@@ -482,13 +482,13 @@ describe("options: the service address is validated before it is stored (§7)", 
     const { chromeApi, sent, stored } = fakeChrome();
     await init(doc, chromeApi);
 
-    doc.els["service-address"].value = "curator.nebula.lc";
+    doc.els["service-address"].value = "curator.beta.example.lc";
     doc.els["browser-name"].value = "work-laptop";
     doc.els["enroll-code"].value = "WIN-CODE";
     await doc.els["submit-enroll"]._handlers.click();
 
     expect(sent.find((m) => m.type === "submit_enrollment")).toBeTruthy();
-    expect(stored.serviceAddress).toBe("wss://curator.nebula.lc");
+    expect(stored.serviceAddress).toBe("wss://curator.beta.example.lc");
   });
 
   it("an empty field still clears the setting without shouting", async () => {

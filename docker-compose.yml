@@ -33,7 +33,7 @@ services:
     # does not redeploy anything — change it in Portainer too, or it drifts again.
     # The org is `projects`, not `vvzvlad`: the workflow builds the path from
     # `github.repository`, which is `projects/tabscurator`, and the live container
-    # on nebula pulls exactly that. The `vvzvlad/...` spelling here published
+    # in production pulls exactly that. The `vvzvlad/...` spelling here published
     # nowhere and matched nothing.
     image: gitea.vvzvlad.xyz/projects/tabscurator:develop
     container_name: curator
@@ -80,7 +80,7 @@ services:
       traefik.http.routers.curator.entrypoints: websecure
       traefik.http.routers.curator.tls: "true"
       traefik.http.routers.curator.tls.certresolver: letsEncrypt
-      io.portainer.update.enable: "true"   # auto-update the image — the fleet standard on nebula (not the watchtower label)
+      io.portainer.update.enable: "true"   # auto-update the image — the fleet standard in production (not the watchtower label)
     healthcheck:
       # Short interval + start_period are REQUIRED behind Traefik: Traefik does not
       # route to a container while its health is starting/unhealthy, so interval:30m

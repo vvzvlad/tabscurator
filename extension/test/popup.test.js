@@ -36,15 +36,15 @@ describe("httpBaseFromServiceUrl", () => {
 
 describe("buildRule", () => {
   it("builds a host pattern (NOT a full URL) and an <origin>/* label", () => {
-    const rule = buildRule("https://borneo.lc/a/b?q=1#f", "prox");
+    const rule = buildRule("https://alpha.example.lc/a/b?q=1#f", "prox");
     // The stored pattern is the HOST — a full URL would be rejected 422 by §8.
-    expect(rule.pattern).toBe("borneo.lc");
+    expect(rule.pattern).toBe("alpha.example.lc");
     expect(rule.instance_id).toBe("prox");
-    expect(rule.label).toBe("https://borneo.lc/*");
+    expect(rule.label).toBe("https://alpha.example.lc/*");
   });
 
   it("keeps an explicit non-default port in the pattern", () => {
-    expect(buildRule("https://grafana.lc:3000/d", "prox").pattern).toBe("grafana.lc:3000");
+    expect(buildRule("https://grafana.example.lc:3000/d", "prox").pattern).toBe("grafana.example.lc:3000");
   });
 
   it("rejects a non-http(s) tab", () => {
@@ -151,14 +151,14 @@ function textResp(status, text) {
 describe("requestPreview / saveRule", () => {
   it("previews with a Bearer token and the host pattern body", async () => {
     const fetchFn = vi.fn(async () => jsonResp(200, { relocations: 2, closures: 0 }));
-    const rule = { pattern: "borneo.lc", instance_id: "prox" };
+    const rule = { pattern: "alpha.example.lc", instance_id: "prox" };
     const payload = await requestPreview(fetchFn, "https://host.example", "tok", rule);
     expect(payload).toEqual({ relocations: 2, closures: 0 });
     const [url, opts] = fetchFn.mock.calls[0];
     expect(url).toBe("https://host.example/api/rules/preview");
     expect(opts.method).toBe("POST");
     expect(opts.headers.Authorization).toBe("Bearer tok");
-    expect(JSON.parse(opts.body)).toEqual({ pattern: "borneo.lc", instance_id: "prox" });
+    expect(JSON.parse(opts.body)).toEqual({ pattern: "alpha.example.lc", instance_id: "prox" });
   });
 
   it("throws the SERVER's words on a 422 (validation is the server's job, §8)", async () => {
@@ -172,21 +172,21 @@ describe("requestPreview / saveRule", () => {
 
   it("saves WITHOUT confirm_impact by default (the §8 gate is not echo-confirmed)", async () => {
     const fetchFn = vi.fn(async () => jsonResp(201, { ok: true, id: 7 }));
-    const rule = { pattern: "borneo.lc", instance_id: "prox" };
+    const rule = { pattern: "alpha.example.lc", instance_id: "prox" };
     const res = await saveRule(fetchFn, "https://host.example", "tok", rule);
     expect(res.status).toBe(201);
     const [url, opts] = fetchFn.mock.calls[0];
     expect(url).toBe("https://host.example/api/rules");
     // No confirm_impact key at all: the human has confirmed nothing yet.
-    expect(JSON.parse(opts.body)).toEqual({ pattern: "borneo.lc", instance_id: "prox" });
+    expect(JSON.parse(opts.body)).toEqual({ pattern: "alpha.example.lc", instance_id: "prox" });
   });
 
   it("sends confirm_impact:true only when explicitly asked", async () => {
     const fetchFn = vi.fn(async () => jsonResp(201, { ok: true, id: 7 }));
-    const rule = { pattern: "borneo.lc", instance_id: "prox" };
+    const rule = { pattern: "alpha.example.lc", instance_id: "prox" };
     await saveRule(fetchFn, "https://host.example", "tok", rule, { confirmImpact: true });
     expect(JSON.parse(fetchFn.mock.calls[0][1].body)).toEqual({
-      pattern: "borneo.lc",
+      pattern: "alpha.example.lc",
       instance_id: "prox",
       confirm_impact: true,
     });
@@ -294,14 +294,14 @@ describe("init: build -> preview -> save", () => {
     };
     const { fetchFn, calls } = routedFetch(preview);
 
-    await init(doc, chromeOn("https://borneo.lc/dashboard"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/dashboard"), fetchFn);
 
     // Built the rule for the current instance and rendered it into the EDITABLE fields.
-    expect(doc.els.origin.textContent).toBe("https://borneo.lc/*");
-    expect(doc.els.pattern.value).toBe("borneo.lc");
+    expect(doc.els.origin.textContent).toBe("https://alpha.example.lc/*");
+    expect(doc.els.pattern.value).toBe("alpha.example.lc");
     expect(doc.els.target.value).toBe("prox");
     // Previewed via the server matcher; impact + "not counted" surfaced.
-    expect(bodyOf(previews(calls)[0])).toEqual({ pattern: "borneo.lc", instance_id: "prox" });
+    expect(bodyOf(previews(calls)[0])).toEqual({ pattern: "alpha.example.lc", instance_id: "prox" });
     expect(doc.els.impact.textContent).toContain("relocate 3");
     expect(doc.els.impact.textContent).toContain("close 1");
     expect(doc.els.impact.textContent).toContain("old"); // not-counted instance named
@@ -310,7 +310,7 @@ describe("init: build -> preview -> save", () => {
     // the server's question, and one click must not answer it blind).
     expect(doc.els.save.disabled).toBe(false);
     await doc.els.save._click();
-    expect(bodyOf(saves(calls)[0])).toEqual({ pattern: "borneo.lc", instance_id: "prox" });
+    expect(bodyOf(saves(calls)[0])).toEqual({ pattern: "alpha.example.lc", instance_id: "prox" });
     expect(doc.els.status.textContent).toContain("Rule saved.");
   });
 
@@ -319,7 +319,7 @@ describe("init: build -> preview -> save", () => {
     const doc = fakeDoc();
     const { fetchFn, calls } = routedFetch({ relocations: 0, closures: 0 });
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
 
     const stateCall = calls.find((c) => c.url.endsWith("/api/state"));
     expect(stateCall.opts.headers.Authorization).toBe("Bearer the-secret");
@@ -337,13 +337,13 @@ describe("init: build -> preview -> save", () => {
       new Error("network down"),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
 
     expect(doc.els.status.textContent).toContain("Could not load the list of browsers");
     expect(doc.els.target.children.map((o) => o.value)).toEqual(["prox"]);
     expect(doc.els.save.disabled).toBe(false); // the popup still works
     await doc.els.save._click();
-    expect(bodyOf(saves(calls)[0])).toEqual({ pattern: "borneo.lc", instance_id: "prox" });
+    expect(bodyOf(saves(calls)[0])).toEqual({ pattern: "alpha.example.lc", instance_id: "prox" });
   });
 
   it("recomputes the preview for the new destination when the target changes", async () => {
@@ -352,12 +352,12 @@ describe("init: build -> preview -> save", () => {
       jsonResp(200, { relocations: body.instance_id === "main" ? 12 : 1, closures: 0 }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     expect(doc.els.impact.textContent).toContain("relocate 1");
 
     await doc.els.target._pick("main"); // picking is one deliberate act: no debounce
     expect(previews(calls)).toHaveLength(2);
-    expect(bodyOf(previews(calls)[1])).toEqual({ pattern: "borneo.lc", instance_id: "main" });
+    expect(bodyOf(previews(calls)[1])).toEqual({ pattern: "alpha.example.lc", instance_id: "main" });
     expect(doc.els.impact.textContent).toContain("relocate 12");
   });
 
@@ -365,23 +365,23 @@ describe("init: build -> preview -> save", () => {
     vi.useFakeTimers();
     const doc = fakeDoc();
     const { fetchFn, calls } = routedFetch((body) =>
-      jsonResp(200, { relocations: body.pattern === "*.borneo.lc" ? 9 : 1, closures: 0 }),
+      jsonResp(200, { relocations: body.pattern === "*.alpha.example.lc" ? 9 : 1, closures: 0 }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     expect(previews(calls)).toHaveLength(1);
 
     // Three keystrokes in one burst: the preview is a WHOLE-PASS simulation that pokes
     // every instance for a fresh snapshot, so it must not run per character.
-    doc.els.pattern._type("*.borneo");
-    doc.els.pattern._type("*.borneo.l");
-    doc.els.pattern._type("*.borneo.lc");
+    doc.els.pattern._type("*.alpha");
+    doc.els.pattern._type("*.alpha.example.l");
+    doc.els.pattern._type("*.alpha.example.lc");
     expect(previews(calls)).toHaveLength(1); // nothing sent yet
 
     await vi.advanceTimersByTimeAsync(PATTERN_DEBOUNCE_MS + 5);
     expect(previews(calls)).toHaveLength(2); // exactly ONE for the whole burst
     expect(bodyOf(previews(calls)[1])).toEqual({
-      pattern: "*.borneo.lc",
+      pattern: "*.alpha.example.lc",
       instance_id: "prox",
     });
     expect(doc.els.impact.textContent).toContain("relocate 9");
@@ -389,7 +389,7 @@ describe("init: build -> preview -> save", () => {
 
   // --- THE one: an edit must take the armed confirmation with it --------------
   it("editing the PATTERN after a 409 disarms the confirm (no blind confirmation)", async () => {
-    // The bypass this prevents: see the impact of `borneo.lc` (2/0), widen the pattern to
+    // The bypass this prevents: see the impact of `alpha.example.lc` (2/0), widen the pattern to
     // `*.lc` (300/120) and click the still-armed "Confirm and save" — confirm_impact goes
     // out for a rule whose impact the server never showed. That is the echo-confirmation
     // the §8 two-step exists to stop.
@@ -407,7 +407,7 @@ describe("init: build -> preview -> save", () => {
             }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     await doc.els.save._click(); // 1st click: unconfirmed probe → 409 arms
     expect(doc.els.save.textContent).toBe("Confirm and save");
     expect(doc.els.impact.textContent).toContain("relocate 2");
@@ -437,7 +437,7 @@ describe("init: build -> preview -> save", () => {
         : jsonResp(409, { relocations: 5, closures: 0, requires_confirm: true }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     await doc.els.save._click();
     expect(doc.els.save.textContent).toBe("Confirm and save");
 
@@ -465,7 +465,7 @@ describe("init: build -> preview -> save", () => {
         : jsonResp(409, { relocations: 2, closures: 0, requires_confirm: true });
     });
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     const firstClick = doc.els.save._click(); // parked in flight
 
     doc.els.pattern._type("*.lc"); // edited while the save is in flight
@@ -474,7 +474,7 @@ describe("init: build -> preview -> save", () => {
     release();
     await firstClick;
 
-    // The 409 for `borneo.lc` must NOT arm a confirm for `*.lc`.
+    // The 409 for `alpha.example.lc` must NOT arm a confirm for `*.lc`.
     expect(doc.els.save.textContent).not.toBe("Confirm and save");
     await doc.els.save._click();
     const last = saves(calls)[saves(calls).length - 1];
@@ -489,14 +489,14 @@ describe("init: build -> preview -> save", () => {
     const doc = fakeDoc();
     const deferred = {};
     const { fetchFn, calls } = routedFetch((body) => {
-      if (body.pattern === "borneo.lc") return jsonResp(200, { relocations: 1, closures: 0 });
+      if (body.pattern === "alpha.example.lc") return jsonResp(200, { relocations: 1, closures: 0 });
       return new Promise((resolve) => {
         deferred[body.pattern] = () =>
           resolve(jsonResp(200, { relocations: body.pattern === "a.lc" ? 99 : 2, closures: 0 }));
       });
     });
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
 
     doc.els.pattern._type("a.lc");
     await vi.advanceTimersByTimeAsync(PATTERN_DEBOUNCE_MS + 5);
@@ -529,7 +529,7 @@ describe("init: build -> preview -> save", () => {
         : jsonResp(201, { ok: true, id: 9 }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/dashboard"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/dashboard"), fetchFn);
     await doc.els.save._click(); // 1st click: unconfirmed
 
     expect(bodyOf(saves(calls)[0]).confirm_impact).toBeUndefined();
@@ -563,7 +563,7 @@ describe("init: build -> preview -> save", () => {
       }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     await doc.els.save._click();
 
     expect(doc.els.save.textContent).toBe("Confirm and save"); // armed, as the server asked
@@ -582,7 +582,7 @@ describe("init: build -> preview -> save", () => {
       textResp(409, "<html>502 from a proxy</html>"),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     await doc.els.save._click();
     expect(doc.els.impact.textContent).not.toContain("relocate 0");
     expect(doc.els.save.textContent).not.toBe("Confirm and save");
@@ -603,7 +603,7 @@ describe("init: build -> preview -> save", () => {
         : jsonResp(201, { ok: true, id: 3 }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     await doc.els.save._click();
     expect(doc.els.status.textContent).toContain("423");
     // …and it says what to DO about it, not only that it failed. The stop is
@@ -626,7 +626,7 @@ describe("init: build -> preview -> save", () => {
     const doc = fakeDoc();
     const detail =
       "invalid rule pattern: pattern looks like a URL (contains '/'); " +
-      "enter only a host pattern like 'borneo.lc' or 'borneo.lc:8443'";
+      "enter only a host pattern like 'alpha.example.lc' or 'alpha.example.lc:8443'";
     const { fetchFn } = routedFetch(
       (body) =>
         body.pattern.includes("/")
@@ -635,9 +635,9 @@ describe("init: build -> preview -> save", () => {
       (n, body) => (body.pattern.includes("/") ? textResp(422, detail) : jsonResp(201, { ok: true })),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
 
-    doc.els.pattern._type("https://borneo.lc/path");
+    doc.els.pattern._type("https://alpha.example.lc/path");
     await vi.advanceTimersByTimeAsync(PATTERN_DEBOUNCE_MS + 5);
     expect(doc.els.impact.textContent).toContain("looks like a URL");
 
@@ -647,7 +647,7 @@ describe("init: build -> preview -> save", () => {
     expect(doc.els.save.disabled).toBe(false); // a typo is fixable in place
 
     // Fixing it recovers without reopening the popup.
-    doc.els.pattern._type("borneo.lc");
+    doc.els.pattern._type("alpha.example.lc");
     await vi.advanceTimersByTimeAsync(PATTERN_DEBOUNCE_MS + 5);
     await doc.els.save._click();
     expect(doc.els.status.textContent).toContain("Rule saved.");
@@ -662,7 +662,7 @@ describe("init: build -> preview -> save", () => {
       throw new Error("network down");
     });
 
-    await init(doc, chromeOn("https://borneo.lc/x"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/x"), fetchFn);
     await doc.els.save._click(); // armed by the 409
     expect(doc.els.save.textContent).toBe("Confirm and save");
 
@@ -685,7 +685,7 @@ describe("init: build -> preview -> save", () => {
         : jsonResp(201, { ok: true, id: 9 }),
     );
 
-    await init(doc, chromeOn("https://borneo.lc/dashboard"), fetchFn);
+    await init(doc, chromeOn("https://alpha.example.lc/dashboard"), fetchFn);
     expect(doc.els.impact.textContent).toContain("Preview unavailable");
     // The screen says what this means for the human: saving is still safe, because the
     // server recomputes and asks. Otherwise "unavailable" reads as "do not touch this".

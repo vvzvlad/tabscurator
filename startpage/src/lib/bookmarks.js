@@ -27,7 +27,7 @@ const SITE_SUFFIXES = [
 const MIN_TITLE_LENGTH = 3;
 
 // A title that is nothing but digits, dots and colons is an address, not a name —
-// "10.20.30.226:8080" tells the human less than the host does.
+// "192.0.2.26:8080" tells the human less than the host does.
 const NUMERIC_TITLE = /^[\d.:]+$/;
 
 // Host without the "www." noise. An unparsable/absent url yields "" — callers treat

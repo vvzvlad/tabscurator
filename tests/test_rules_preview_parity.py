@@ -110,7 +110,7 @@ def _assert_agree(dec, prev):
 def test_orphaned_rule_defers_in_both_engines(tmp_path):
     """The reviewer's exact configuration.
 
-    ``grafana.lc -> ghost`` is orphaned (its instance is retired, so the rule is flagged
+    ``grafana.example.lc -> ghost`` is orphaned (its instance is retired, so the rule is flagged
     ``invalid``); a valid ``other.lc -> prox`` keeps the policy non-empty so the drain is
     on. The tab in ``prox`` matches the ORPHANED rule.
 
@@ -119,8 +119,8 @@ def test_orphaned_rule_defers_in_both_engines(tmp_path):
     ``relocations: 1`` pointing at the wrong instance — an inflated count AND a false
     destination on the screen the owner confirms from.
     """
-    tabs = [_tab("prox", 1, "https://grafana.lc/d/x")]
-    rules = [_rule(1, "grafana.lc", "ghost", invalid=1), _rule(2, "other.lc", "prox")]
+    tabs = [_tab("prox", 1, "https://grafana.example.lc/d/x")]
+    rules = [_rule(1, "grafana.example.lc", "ghost", invalid=1), _rule(2, "other.lc", "prox")]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
 
     _assert_agree(dec, prev)
@@ -153,10 +153,10 @@ def test_second_identical_tab_defers_instead_of_opening_twice(tmp_path):
     other (§7 forbids the curator creating duplicates of its own). The preview used to
     count two relocations."""
     tabs = [
-        _tab("prox", 1, "https://grafana.lc/d/x"),
-        _tab("prox", 2, "https://grafana.lc/d/x"),
+        _tab("prox", 1, "https://grafana.example.lc/d/x"),
+        _tab("prox", 2, "https://grafana.example.lc/d/x"),
     ]
-    rules = [_rule(1, "grafana.lc", MAIN)]
+    rules = [_rule(1, "grafana.example.lc", MAIN)]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
 
     _assert_agree(dec, prev)
@@ -166,8 +166,8 @@ def test_second_identical_tab_defers_instead_of_opening_twice(tmp_path):
 
 # --- the branches that already agreed must KEEP agreeing --------------------
 def test_plain_relocation_agrees(tmp_path):
-    tabs = [_tab("prox", 1, "https://grafana.lc/d/x")]
-    rules = [_rule(1, "grafana.lc", MAIN)]
+    tabs = [_tab("prox", 1, "https://grafana.example.lc/d/x")]
+    rules = [_rule(1, "grafana.example.lc", MAIN)]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
     _assert_agree(dec, prev)
     assert prev.relocations == 1
@@ -176,7 +176,7 @@ def test_plain_relocation_agrees(tmp_path):
 def test_unruled_drain_to_main_agrees(tmp_path):
     # A themed tab with no rule drains to main — but ONLY while some rule exists (§8).
     tabs = [_tab("prox", 1, "https://random.io/x")]
-    rules = [_rule(1, "grafana.lc", MAIN)]
+    rules = [_rule(1, "grafana.example.lc", MAIN)]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
     _assert_agree(dec, prev)
     assert prev.relocations == 1
@@ -191,8 +191,8 @@ def test_empty_policy_touches_nothing_in_both(tmp_path):
 
 
 def test_target_not_ready_defers_in_both(tmp_path):
-    tabs = [_tab("prox", 1, "https://grafana.lc/d/x")]
-    rules = [_rule(1, "grafana.lc", "media")]
+    tabs = [_tab("prox", 1, "https://grafana.example.lc/d/x")]
+    rules = [_rule(1, "grafana.example.lc", "media")]
     dec, prev = _both(
         tabs, [_inst(MAIN), _inst("prox"), _inst("media")], rules,
         ready={MAIN, "prox"},           # media is not ready this pass
@@ -204,10 +204,10 @@ def test_target_not_ready_defers_in_both(tmp_path):
 def test_inter_instance_dedup_agrees(tmp_path):
     # The target already holds this exact URL => a close, never a relocation (§7 q2).
     tabs = [
-        _tab("prox", 1, "https://grafana.lc/d/x"),
-        _tab(MAIN, 9, "https://grafana.lc/d/x"),
+        _tab("prox", 1, "https://grafana.example.lc/d/x"),
+        _tab(MAIN, 9, "https://grafana.example.lc/d/x"),
     ]
-    rules = [_rule(1, "grafana.lc", MAIN)]
+    rules = [_rule(1, "grafana.example.lc", MAIN)]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
     _assert_agree(dec, prev)
     assert prev.relocations == 0 and prev.closures == 1
@@ -215,10 +215,10 @@ def test_inter_instance_dedup_agrees(tmp_path):
 
 def test_singleton_collapse_agrees(tmp_path):
     tabs = [
-        _tab("prox", 1, "https://grafana.lc/a", last_active_at=NOW - 3 * HOUR),
-        _tab("prox", 2, "https://grafana.lc/b", last_active_at=NOW - 2 * HOUR),
+        _tab("prox", 1, "https://grafana.example.lc/a", last_active_at=NOW - 3 * HOUR),
+        _tab("prox", 2, "https://grafana.example.lc/b", last_active_at=NOW - 2 * HOUR),
     ]
-    rules = [_rule(1, "grafana.lc", "prox", singleton=1)]
+    rules = [_rule(1, "grafana.example.lc", "prox", singleton=1)]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
     _assert_agree(dec, prev)
     assert prev.closures == 1
@@ -226,10 +226,10 @@ def test_singleton_collapse_agrees(tmp_path):
 
 def test_intra_instance_dedup_agrees(tmp_path):
     tabs = [
-        _tab("prox", 1, "https://grafana.lc/a"),
-        _tab("prox", 2, "https://grafana.lc/a"),
+        _tab("prox", 1, "https://grafana.example.lc/a"),
+        _tab("prox", 2, "https://grafana.example.lc/a"),
     ]
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     dec, prev = _both(tabs, [_inst(MAIN), _inst("prox")], rules)
     _assert_agree(dec, prev)
     assert prev.closures == 1
@@ -238,12 +238,12 @@ def test_intra_instance_dedup_agrees(tmp_path):
 def test_step4_guards_agree(tmp_path):
     # pinned / audible / active-in-focused-window / not-idle are all skipped by both.
     tabs = [
-        _tab("prox", 1, "https://grafana.lc/a", pinned=1),
-        _tab("prox", 2, "https://grafana.lc/b", audible=1),
-        _tab("prox", 3, "https://grafana.lc/c", active=1, window_id=7),
-        _tab("prox", 4, "https://grafana.lc/d", last_active_at=NOW - 60_000),
+        _tab("prox", 1, "https://grafana.example.lc/a", pinned=1),
+        _tab("prox", 2, "https://grafana.example.lc/b", audible=1),
+        _tab("prox", 3, "https://grafana.example.lc/c", active=1, window_id=7),
+        _tab("prox", 4, "https://grafana.example.lc/d", last_active_at=NOW - 60_000),
     ]
-    rules = [_rule(1, "grafana.lc", MAIN)]
+    rules = [_rule(1, "grafana.example.lc", MAIN)]
     dec, prev = _both(
         tabs, [_inst(MAIN), _inst("prox", focused_window_id=7)], rules,
         windows={("prox", 1): ("normal", "normal"), ("prox", 7): ("normal", "normal")},
@@ -254,14 +254,14 @@ def test_step4_guards_agree(tmp_path):
 
 def test_exemption_and_quarantine_agree(tmp_path):
     tabs = [
-        _tab("prox", 1, "https://grafana.lc/a"),
-        _tab("prox", 2, "https://grafana.lc/b"),
+        _tab("prox", 1, "https://grafana.example.lc/a"),
+        _tab("prox", 2, "https://grafana.example.lc/b"),
     ]
-    rules = [_rule(1, "grafana.lc", MAIN)]
+    rules = [_rule(1, "grafana.example.lc", MAIN)]
     dec, prev = _both(
         tabs, [_inst(MAIN), _inst("prox")], rules,
-        exemptions=[("prox", "https://grafana.lc/a", NOW + HOUR)],
-        quarantine=[("prox", "https://grafana.lc/b", NOW + HOUR)],
+        exemptions=[("prox", "https://grafana.example.lc/a", NOW + HOUR)],
+        quarantine=[("prox", "https://grafana.example.lc/b", NOW + HOUR)],
     )
     _assert_agree(dec, prev)
     assert prev.relocations == 0

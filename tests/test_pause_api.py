@@ -298,13 +298,13 @@ def test_start_after_a_stop_latches_an_over_threshold_plan_then_confirms(tmp_pat
     with TestClient(app) as client:
         # Two ruled idle tabs on i1, homed to the (also connected) main: countable
         # phase-A = 2 > threshold 1.
-        tabs = [_tab(10, "https://grafana.lc/d/a"), _tab(11, "https://grafana.lc/d/b")]
+        tabs = [_tab(10, "https://grafana.example.lc/d/a"), _tab(11, "https://grafana.example.lc/d/b")]
         ws_src = _connect_instance(client, db_path, "i1", "s-i1", tabs)
         ws_main = _connect_instance(client, db_path, "main", "s-main", [])
         pool = ThreadPoolExecutor(1)
         try:
             _w(db_path, "INSERT INTO rules (pattern, instance_id, singleton, invalid, "
-                        "created_at) VALUES ('grafana.lc', 'main', 0, 0, 0)")
+                        "created_at) VALUES ('grafana.example.lc', 'main', 0, 0, 0)")
             client.post("/api/pause", headers=AUTH)
 
             # (a) DELETE while STOPPED: the start's pass runs the normal gate.

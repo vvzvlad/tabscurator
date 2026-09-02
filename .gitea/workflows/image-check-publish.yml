@@ -1,9 +1,9 @@
 name: Docker Image CI
 
 # No `pull_request` trigger on purpose: a PR build would push the `:develop` tag
-# this repo's production deploys from, and watchtower on nebula polls every 10
-# seconds. Tests for pull requests live in tests.yml, which has no build job, no
-# docker push and no registry secret.
+# this repo's production deploys from, and watchtower on the production host
+# polls every 10 seconds. Tests for pull requests live in tests.yml, which has no
+# build job, no docker push and no registry secret.
 on:
   workflow_dispatch:
   push:
@@ -148,7 +148,7 @@ jobs:
 
     - name: Compute image tags
       id: tags
-      # develop -> :develop, and that is the tag watchtower on nebula deploys today.
+      # develop -> :develop, and that is the tag watchtower deploys in production today.
       # main -> :latest + :<sha> is reserved for releases; the branch does not exist yet.
       # ANY OTHER branch gets its own :<branch> tag. It used to fall through to :develop,
       # which meant a build off a side branch silently overwrote the tag production
@@ -169,7 +169,7 @@ jobs:
         # DEFAULT (AND ONLY) BRANCH — IT WOULD BREAK PRODUCTION.
         # Everywhere else in the fleet the default branch is `main` and this check
         # selects the production tag, so the obvious-looking correction here is to
-        # swap in `develop`. Do not. Production on nebula pulls
+        # swap in `develop`. Do not. Production pulls
         # `gitea.vvzvlad.xyz/projects/tabscurator:develop`, and that tag is produced
         # by the ELSE branch below, where the sanitiser turns the branch name
         # `develop` into the tag `develop`. Changing the condition would send
@@ -231,10 +231,10 @@ jobs:
       run: |
         tag_args=""
         for tag in $TAGS; do tag_args="$tag_args --tag $tag"; done
-        # --pull is required here: unlike GitHub's ephemeral runners, cirunner-hatbox
-        # is self-hosted with a persistent docker daemon, so a once-pulled
-        # python:3.11-slim would sit in its cache for months and every build would
-        # inherit an unpatched base layer.
+        # --pull is required here: unlike GitHub's ephemeral runners, the self-hosted
+        # runner has a persistent docker daemon, so a once-pulled python:3.11-slim
+        # would sit in its cache for months and every build would inherit an
+        # unpatched base layer.
         docker build --pull . --file Dockerfile \
           --build-arg BUILD_REVISION="$REVISION" $tag_args
 

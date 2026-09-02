@@ -28,7 +28,7 @@ async def test_insert_rejects_full_url_pattern(tmp_path):
         with pytest.raises(InvalidPattern):
             await db.write(
                 lambda c: access.insert_rule(
-                    c, pattern="https://borneo.lc/path", instance_id="home", created_at=1
+                    c, pattern="https://alpha.example.lc/path", instance_id="home", created_at=1
                 )
             )
         # Nothing was written.
@@ -76,7 +76,7 @@ async def test_revalidate_marks_orphaned_instance_rules_invalid(tmp_path):
         await db.write(lambda c: _seed_instance(c, "home"))
         rid = await db.write(
             lambda c: access.insert_rule(
-                c, pattern="borneo.lc", instance_id="home", created_at=1
+                c, pattern="alpha.example.lc", instance_id="home", created_at=1
             )
         )
         assert (await db.read(lambda c: access.get_rule(c, rid)))["invalid"] == 0
@@ -102,18 +102,18 @@ async def test_update_clears_invalid_and_delete_removes(tmp_path):
         await db.write(lambda c: _seed_instance(c, "home"))
         rid = await db.write(
             lambda c: access.insert_rule(
-                c, pattern="borneo.lc", instance_id="home", created_at=1
+                c, pattern="alpha.example.lc", instance_id="home", created_at=1
             )
         )
         # Force invalid, then a valid update clears it.
         await db.write(lambda c: c.execute("UPDATE rules SET invalid=1 WHERE id=?", (rid,)))
         await db.write(
             lambda c: access.update_rule(
-                c, rid, pattern="borneo.lc:443", instance_id="home", singleton=True
+                c, rid, pattern="alpha.example.lc:443", instance_id="home", singleton=True
             )
         )
         row = await db.read(lambda c: access.get_rule(c, rid))
-        assert row["invalid"] == 0 and row["singleton"] == 1 and row["pattern"] == "borneo.lc:443"
+        assert row["invalid"] == 0 and row["singleton"] == 1 and row["pattern"] == "alpha.example.lc:443"
 
         await db.write(lambda c: access.delete_rule(c, rid))
         assert await db.read(access.count_rules) == 0

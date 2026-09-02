@@ -57,8 +57,8 @@ describe("cleanTitle", () => {
     expect(cleanTitle("example.com", "https://example.com/a")).toBe("example.com");
     expect(cleanTitle("EXAMPLE.COM", "https://example.com/a")).toBe("example.com");
     // A bare address says less than the host does.
-    expect(cleanTitle("10.20.30.226:8080", "http://10.20.30.226:8080/panel")).toBe(
-      "10.20.30.226:8080",
+    expect(cleanTitle("192.0.2.26:8080", "http://192.0.2.26:8080/panel")).toBe(
+      "192.0.2.26:8080",
     );
     expect(cleanTitle("192.168.1.1", "https://router.lan/")).toBe("router.lan");
   });
@@ -89,7 +89,7 @@ describe("cleanTitle", () => {
 describe("hostOf", () => {
   it("drops the www. prefix and keeps the port", () => {
     expect(hostOf("https://www.example.com/a?b=1")).toBe("example.com");
-    expect(hostOf("http://10.20.30.226:8080/x")).toBe("10.20.30.226:8080");
+    expect(hostOf("http://192.0.2.26:8080/x")).toBe("192.0.2.26:8080");
   });
   it("answers '' for anything unparsable", () => {
     expect(hostOf("not a url")).toBe("");

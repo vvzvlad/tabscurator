@@ -2966,7 +2966,7 @@ async def test_set_exemption_reuses_the_url_and_instance_guards(tmp_path):
     await _known_instance(db)
     app = _app(db)
     with pytest.raises(tools.ToolError) as ei:
-        await tools.set_exemption(app, instance="main", url="grafana.lc/d/1", ttl_s=60)
+        await tools.set_exemption(app, instance="main", url="grafana.example.lc/d/1", ttl_s=60)
     assert "http" in ei.value.message
     with pytest.raises(tools.ToolError):
         await tools.set_exemption(app, instance="typo", url="https://a/", ttl_s=60)
@@ -3085,7 +3085,7 @@ async def test_an_INVALID_lease_argument_is_refused_before_the_tab_is_opened(tmp
         assert door_b.value.code == door_a.value.code == "invalid_request"
     # A bad url is refused on the same path, and likewise before the browser is touched.
     with pytest.raises(tools.ToolError) as exc:
-        await tools.open_tab(_app(db, reg), instance="main", url="grafana.lc/d/1",
+        await tools.open_tab(_app(db, reg), instance="main", url="grafana.example.lc/d/1",
                              lease_ttl_s=600)
     assert exc.value.code == "invalid_request"
     assert ws.sent == []  # NOTHING went on the socket

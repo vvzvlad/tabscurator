@@ -2,9 +2,9 @@ name: Tests
 
 # Split out from image-check-publish.yml on purpose: that workflow must never
 # run on pull_request, because a PR build would push the `:develop` tag prod
-# deploys from and watchtower on nebula would pick it up within seconds. Tests
-# alone are safe here and are what a PR actually needs — without this workflow a
-# broken test only surfaces after the merge into develop.
+# deploys from and watchtower on the production host would pick it up within
+# seconds. Tests alone are safe here and are what a PR actually needs — without
+# this workflow a broken test only surfaces after the merge into develop.
 #
 # `develop` is this repository's default branch and the only long-lived one:
 # there is no `main` yet (it is reserved for releases), so a PR here targets

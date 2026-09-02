@@ -196,9 +196,9 @@ async def _rows(db, sql, params=()):
 async def test_phase_a_opens_copy_and_writes_relocate(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         await ext.add_instance("prox", tabs=[])
 
         def respond(iid, cmd, params):
@@ -233,9 +233,9 @@ async def test_phase_a_open_tab_frame_carries_no_window_id(tmp_path):
     Slip a ``windowId`` into phase A's frame and this reddens."""
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         await ext.add_instance("prox", tabs=[])
 
         seen_open_params = []
@@ -259,7 +259,7 @@ async def test_phase_a_open_tab_frame_carries_no_window_id(tmp_path):
 async def test_passes_row_written_on_empty_pass(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
         # A ready instance with only an unruled main tab => no decisions.
         await ext.add_instance("main", tabs=[_tabinfo(1, "https://random.example/p")])
@@ -279,17 +279,17 @@ async def test_passes_row_written_on_empty_pass(tmp_path):
 async def test_source_discard_between_phases_completes(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
         # The relocate row's source hint is tab_id=20, but the source was discarded
         # and now carries tab_id=77 with the SAME url (§5). Phase B must find it by
         # (instance, session, full URL), close 77, and complete.
-        await ext.add_instance("main", tabs=[_tabinfo(77, "https://grafana.lc/d/abc")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/abc")])
+        await ext.add_instance("main", tabs=[_tabinfo(77, "https://grafana.example.lc/d/abc")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/abc")])
         await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
         )
         closed = {}
 
@@ -329,7 +329,7 @@ async def test_completed_relocation_retired_from_live_relocations(tmp_path):
         reloc_id = await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
         )
         # Before phase B: the relocation is live.
         m1 = await db.read(load_mirror)
@@ -338,7 +338,7 @@ async def test_completed_relocation_retired_from_live_relocations(tmp_path):
         await db.write(lambda c: insert_action(
             c, ts=2, kind="relocate_close", status="done", initiator="curator",
             origin_action_id=reloc_id, instance_from="main", instance_to="prox",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc"))
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc"))
         # Now RETIRED: excluded from live_relocations (drop the NOT EXISTS => reddens).
         m2 = await db.read(load_mirror)
         assert [r.id for r in m2.live_relocations] == []
@@ -363,12 +363,12 @@ async def test_failed_relocate_close_leaves_relocation_live(tmp_path):
         reloc_id = await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
         )
         await db.write(lambda c: insert_action(
             c, ts=2, kind="relocate_close", status="failed", initiator="curator",
             origin_action_id=reloc_id, instance_from="main", instance_to="prox",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc"))
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc"))
         # Retire ONLY on a done close => a failed close keeps the row live.
         m = await db.read(load_mirror)
         assert [r.id for r in m.live_relocations] == [reloc_id]
@@ -387,7 +387,7 @@ async def test_phase_b_source_mismatch_abandons_no_loop(tmp_path):
         reloc_id = await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/OLD", url_norm="https://grafana.lc/d/OLD",
+            url="https://grafana.example.lc/d/OLD", url_norm="https://grafana.example.lc/d/OLD",
         )
         sent_cmds = []
         ext.responder = lambda i, c, p: (sent_cmds.append((c, p)) or {"ok": True, "result": {}})
@@ -418,14 +418,14 @@ async def test_phase_b_source_epoch_bump_midpass_ejects_no_strike(tmp_path):
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/abc")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/abc")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/abc")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/abc")])
         reloc_id = await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
         )
         sent_cmds = []
 
@@ -436,7 +436,7 @@ async def test_phase_b_source_epoch_bump_midpass_ejects_no_strike(tmp_path):
                 # (mid-pass), bumping its conn_epoch past the captured readiness.
                 ext.registry.get("main").conn_epoch += 1
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                        "url": "https://grafana.lc/d/abc"}}}
+                                                        "url": "https://grafana.example.lc/d/abc"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 # Only reached if the guard is gone: simulate the stale-tab_id reject.
                 return {"ok": False, "error": {"code": protocol.ERR_PRECONDITION_FAILED}}
@@ -470,11 +470,11 @@ async def test_phase_b_source_moved_copy_live_abandons_no_loop(tmp_path):
         ext = Ext(db)
         # Source moved to a DIFFERENT (unruled) url; the copy is ALIVE in prox.
         await ext.add_instance("main", tabs=[_tabinfo(20, "https://moved.example/here")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/OLD")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/OLD")])
         reloc_id = await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/OLD", url_norm="https://grafana.lc/d/OLD",
+            url="https://grafana.example.lc/d/OLD", url_norm="https://grafana.example.lc/d/OLD",
         )
         sent_cmds = []
 
@@ -482,7 +482,7 @@ async def test_phase_b_source_moved_copy_live_abandons_no_loop(tmp_path):
             sent_cmds.append((iid, cmd))
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                        "url": "https://grafana.lc/d/OLD"}}}
+                                                        "url": "https://grafana.example.lc/d/OLD"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 return {"ok": False, "error": {"code": protocol.ERR_PRECONDITION_FAILED}}
             return {"ok": True, "result": {}}
@@ -511,9 +511,9 @@ async def test_phase_a_invalid_tab_id_writes_no_rows(tmp_path):
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         await ext.add_instance("prox", tabs=[])
         ext.responder = lambda i, c, p: (
             {"ok": True, "result": {"tabId": "not-an-int", "windowId": 1}}
@@ -543,12 +543,12 @@ async def test_close_survivor_vanished_source_not_closed(tmp_path):
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
         # main's tab is ruled to prox; prox already holds the identical url (frozen
         # mirror) => decide schedules a dedupe_close of the main tab, survivor in prox.
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/x")])
         sent_cmds = []
 
         def respond(iid, cmd, params):
@@ -609,20 +609,20 @@ async def test_phase_b_lease_lost_before_completion_pending_survives_then_reconc
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/abc")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/abc")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/abc")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/abc")])
         reloc_id = await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=20,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
         )
 
         def respond(iid, cmd, params):
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/abc"}}}
+                                                       "url": "https://grafana.example.lc/d/abc"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 # Browser closed the source successfully; a pause bumps the epoch NOW,
                 # so the completion write below is fenced (LeaseLost).
@@ -667,24 +667,24 @@ async def test_reconcile_reverts_pending_when_source_still_present_no_double_clo
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
         # main's tab is ruled to prox; prox already holds the identical url => decide
         # schedules a dedupe_close of the main tab (survivor in prox).
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/x")])
         # A leftover pending dedupe_close from a PRIOR pass, source still present.
         pending_id = await _seed_relocate(
             db, kind="dedupe_close", status="pending", decision="dedupe",
             instance_from="main", tab_id=20, session_id_from="s",
-            url="https://grafana.lc/d/x", url_norm="https://grafana.lc/d/x",
+            url="https://grafana.example.lc/d/x", url_norm="https://grafana.example.lc/d/x",
         )
         closes = []
 
         def respond(iid, cmd, params):
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/x"}}}
+                                                       "url": "https://grafana.example.lc/d/x"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 closes.append(params["tabId"])
                 return {"ok": True, "result": {"ok": True}}
@@ -712,26 +712,26 @@ async def test_reconcile_after_reconnect_url_present_abandons_not_phantom_done(t
     the old session short-circuit (session mismatch => absent => done)."""
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
         # Instance reconnected: NEW session "s2", but the same url is still open (a WS
         # reconnect does not close browser tabs). prox holds the survivor for the dedupe.
         await ext.add_instance("main", session="s2",
-                               tabs=[_tabinfo(31, "https://grafana.lc/d/y")])
+                               tabs=[_tabinfo(31, "https://grafana.example.lc/d/y")])
         await ext.add_instance("prox", session="s2",
-                               tabs=[_tabinfo(99, "https://grafana.lc/d/y")])
+                               tabs=[_tabinfo(99, "https://grafana.example.lc/d/y")])
         # A leftover pending dedupe_close from a PRIOR pass under the OLD session "s1".
         pending_id = await _seed_relocate(
             db, kind="dedupe_close", status="pending", decision="dedupe",
             instance_from="main", tab_id=20, session_id_from="s1",
-            url="https://grafana.lc/d/y", url_norm="https://grafana.lc/d/y",
+            url="https://grafana.example.lc/d/y", url_norm="https://grafana.example.lc/d/y",
         )
         closes = []
 
         def respond(iid, cmd, params):
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/y"}}}
+                                                       "url": "https://grafana.example.lc/d/y"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 closes.append(params["tabId"])
                 return {"ok": True, "result": {"ok": True}}
@@ -759,12 +759,12 @@ async def test_reconcile_completes_pending_when_source_gone(tmp_path):
         pending_id = await _seed_relocate(
             db, kind="dedupe_close", status="pending", decision="dedupe",
             instance_from="main", tab_id=20, session_id_from="s",
-            url="https://grafana.lc/d/x", url_norm="https://grafana.lc/d/x",
+            url="https://grafana.example.lc/d/x", url_norm="https://grafana.example.lc/d/x",
         )
         # A leftover strike on the pair; a success (the completed close) resets it.
         await db.write(lambda c: c.execute(
             "INSERT INTO quarantine (instance_id, url, strikes, until, reason) "
-            "VALUES ('main', 'https://grafana.lc/d/x', 2, 0, 'x')"))
+            "VALUES ('main', 'https://grafana.example.lc/d/x', 2, 0, 'x')"))
         closes = []
         ext.responder = lambda i, c, p: (
             closes.append(p.get("tabId")) or {"ok": True, "result": {}}
@@ -776,7 +776,7 @@ async def test_reconcile_completes_pending_when_source_gone(tmp_path):
         assert closes == []  # nothing to close — the source was already gone
         # Strikes reset by the completion (success on the pair, §7).
         assert await _rows(db, "SELECT strikes FROM quarantine "
-                               "WHERE instance_id='main' AND url='https://grafana.lc/d/x'") == [(0,)]
+                               "WHERE instance_id='main' AND url='https://grafana.example.lc/d/x'") == [(0,)]
     finally:
         await db.close()
 
@@ -788,15 +788,15 @@ async def test_close_precondition_failed_updates_pending_to_failed_and_strikes(t
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/x")])
 
         def respond(iid, cmd, params):
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/x"}}}
+                                                       "url": "https://grafana.example.lc/d/x"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 return {"ok": False, "error": {"code": protocol.ERR_PRECONDITION_FAILED}}
             return {"ok": True, "result": {}}
@@ -809,7 +809,7 @@ async def test_close_precondition_failed_updates_pending_to_failed_and_strikes(t
             [("failed", protocol.ERR_PRECONDITION_FAILED)]
         # A strike landed on the (source, url_norm) pair (drop _strike_once => reddens).
         assert await _rows(db, "SELECT strikes FROM quarantine "
-                               "WHERE instance_id='main' AND url='https://grafana.lc/d/x'") == [(1,)]
+                               "WHERE instance_id='main' AND url='https://grafana.example.lc/d/x'") == [(1,)]
         # Source NOT closed (precondition failed).
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='main' AND tab_id=20") == [(1,)]
     finally:
@@ -821,19 +821,19 @@ async def test_dedupe_close_happy_path_one_done_row_tab_deleted(tmp_path):
     `done` row (never a lingering `pending`), the source tab deleted, strikes reset."""
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/x")])
         # Pre-existing strikes on the pair — a successful close resets them (§7).
         await db.write(lambda c: c.execute(
             "INSERT INTO quarantine (instance_id, url, strikes, until, reason) "
-            "VALUES ('main', 'https://grafana.lc/d/x', 2, 0, 'x')"))
+            "VALUES ('main', 'https://grafana.example.lc/d/x', 2, 0, 'x')"))
 
         def respond(iid, cmd, params):
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/x"}}}
+                                                       "url": "https://grafana.example.lc/d/x"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 return {"ok": True, "result": {"ok": True}}
             return {"ok": True, "result": {}}
@@ -845,7 +845,7 @@ async def test_dedupe_close_happy_path_one_done_row_tab_deleted(tmp_path):
         assert await _rows(db, "SELECT status FROM actions WHERE kind='dedupe_close'") == [("done",)]
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='main' AND tab_id=20") == [(0,)]
         assert await _rows(db, "SELECT strikes FROM quarantine "
-                               "WHERE instance_id='main' AND url='https://grafana.lc/d/x'") == [(0,)]
+                               "WHERE instance_id='main' AND url='https://grafana.example.lc/d/x'") == [(0,)]
     finally:
         await db.close()
 
@@ -867,16 +867,16 @@ async def test_reconcile_skipped_when_source_instance_not_ready(tmp_path):
         ext = Ext(db)
         # 'main' is registered but MUTE: it never answers the snapshot_request, so it is
         # never in ready_ids. Its mirror rows are the stale pre-close picture.
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         await db.write(lambda c: c.execute(
             "INSERT INTO tabs (instance_id, tab_id, window_id, url, title, pinned, "
             "active, opened_at, last_active_at, age_unknown, self_navigating, audible, "
-            "updated_at) VALUES ('main', 20, 1, 'https://grafana.lc/d/x', 't', 0, 0, "
+            "updated_at) VALUES ('main', 20, 1, 'https://grafana.example.lc/d/x', 't', 0, 0, "
             "0, 0, 0, 0, 0, 0)"))
         pending_id = await _seed_relocate(
             db, kind="dedupe_close", status="pending", decision="dedupe",
             instance_from="main", tab_id=20, session_id_from="s",
-            url="https://grafana.lc/d/x", url_norm="https://grafana.lc/d/x",
+            url="https://grafana.example.lc/d/x", url_norm="https://grafana.example.lc/d/x",
         )
 
         # Drop every frame on the floor => no snapshot is applied => 'main' is not ready.
@@ -963,7 +963,7 @@ async def test_reconcile_runs_when_source_instance_IS_ready(tmp_path):
         pending_id = await _seed_relocate(
             db, kind="dedupe_close", status="pending", decision="dedupe",
             instance_from="main", tab_id=20, session_id_from="s",
-            url="https://grafana.lc/d/x", url_norm="https://grafana.lc/d/x",
+            url="https://grafana.example.lc/d/x", url_norm="https://grafana.example.lc/d/x",
         )
         ext.responder = lambda i, c, p: {"ok": True, "result": {}}
 
@@ -991,10 +991,10 @@ async def test_stop_during_phase_a_command_does_not_admit_a_second_pass(tmp_path
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "main")   # target = the un-dedupable sink
+        await _seed_rule(db, "grafana.example.lc", "main")   # target = the un-dedupable sink
         ext = Ext(db)
         await ext.add_instance("main", tabs=[])
-        await ext.add_instance("prox", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         inner: dict = {}
         orig_handle = ext._handle_frame
 
@@ -1048,7 +1048,7 @@ async def test_pass_revalidates_rules_orphan_then_restored(tmp_path):
     revalidate_rules is never called from the pass — the flag stays 0 forever."""
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "ghost")  # 'ghost' never existed
+        await _seed_rule(db, "grafana.example.lc", "ghost")  # 'ghost' never existed
         ext = Ext(db)
         await ext.add_instance("main", tabs=[])
         ext.responder = lambda i, c, p: {"ok": True, "result": {}}
@@ -1075,7 +1075,7 @@ async def test_revalidation_never_invalidates_a_rule_pointing_at_main(tmp_path):
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "main")   # main has never connected
+        await _seed_rule(db, "grafana.example.lc", "main")   # main has never connected
         ext = Ext(db)
         await ext.add_instance("prox", tabs=[])      # only a themed instance is up
         ext.responder = lambda i, c, p: {"ok": True, "result": {}}
@@ -1095,7 +1095,7 @@ async def test_revalidation_runs_for_a_dry_run_so_the_confirmed_plan_matches(tmp
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "ghost")
+        await _seed_rule(db, "grafana.example.lc", "ghost")
         ext = Ext(db)
         await ext.add_instance("main", tabs=[])
         ext.responder = lambda i, c, p: {"ok": True, "result": {}}
@@ -1132,11 +1132,11 @@ async def test_orphaned_rule_defers_instead_of_draining_the_tab_into_main(tmp_pa
     """
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "ghost")   # target will be flagged invalid
+        await _seed_rule(db, "grafana.example.lc", "ghost")   # target will be flagged invalid
         await _seed_rule(db, "other.lc", "prox")      # keeps the unruled drain ON
         ext = Ext(db)
         await ext.add_instance("main", tabs=[])
-        await ext.add_instance("prox", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         ext.responder = lambda i, c, p: (
             {"ok": True, "result": {"tabId": ext.next_open_id(), "windowId": 1}}
             if c == protocol.CMD_OPEN_TAB else {"ok": True, "result": {}}
@@ -1167,13 +1167,13 @@ async def test_deferred_rows_name_their_cause(tmp_path):
     metric. Reddens if both causes are written as one row."""
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "main")
+        await _seed_rule(db, "grafana.example.lc", "main")
         ext = Ext(db)
         await ext.add_instance("main", tabs=[])
         # Two identical tabs -> one opens, one is held back as a same-pass duplicate.
         await ext.add_instance("prox", tabs=[
-            _tabinfo(20, "https://grafana.lc/d/x"),
-            _tabinfo(21, "https://grafana.lc/d/x"),
+            _tabinfo(20, "https://grafana.example.lc/d/x"),
+            _tabinfo(21, "https://grafana.example.lc/d/x"),
         ])
         ext.responder = lambda i, c, p: (
             {"ok": True, "result": {"tabId": ext.next_open_id(), "windowId": 1}}
@@ -1233,9 +1233,9 @@ async def test_renew_loop_stops_on_lost_lease():
 async def test_two_concurrent_passes_one_runs(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         await ext.add_instance("prox", tabs=[])
         ext.responder = lambda i, c, p: (
             {"ok": True, "result": {"tabId": ext.next_open_id(), "windowId": 1}}
@@ -1257,13 +1257,13 @@ async def test_two_concurrent_passes_one_runs(tmp_path):
 async def test_clock_jump_forward_no_mass_eviction(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
         # A fleet full of idle tabs that WOULD be relocated/closed on a normal pass.
         await ext.add_instance("main", tabs=[
-            _tabinfo(1, "https://grafana.lc/d/a"),
-            _tabinfo(2, "https://grafana.lc/d/b"),
-            _tabinfo(3, "https://grafana.lc/d/c"),
+            _tabinfo(1, "https://grafana.example.lc/d/a"),
+            _tabinfo(2, "https://grafana.example.lc/d/b"),
+            _tabinfo(3, "https://grafana.example.lc/d/c"),
         ])
         await ext.add_instance("prox", tabs=[])
         ext.responder = lambda i, c, p: {"ok": True, "result": {}}
@@ -1312,9 +1312,9 @@ async def test_await_ready_keys_on_own_request_id(tmp_path):
 async def test_foreign_snapshot_midpass_doesnt_eject(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/x")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
         await ext.add_instance("prox", tabs=[])
 
         def respond(iid, cmd, params):
@@ -1342,9 +1342,9 @@ async def test_foreign_snapshot_midpass_doesnt_eject(tmp_path):
 async def test_non_convergence_latch_quarantines(tmp_path):
     db = await _mkdb(tmp_path)
     try:
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         ext = Ext(db)
-        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.lc/d/abc")])
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/abc")])
         await ext.add_instance("prox", tabs=[])
 
         def respond(iid, cmd, params):
@@ -1395,7 +1395,7 @@ def _latch_raw(db):
 async def _seed_fleet_with_phase_a(ext, db, urls):
     """A main instance holding idle ruled tabs (each becomes one phase-A relocation
     into prox) and an empty prox. Returns nothing; the responder opens copies."""
-    await _seed_rule(db, "grafana.lc", "prox")
+    await _seed_rule(db, "grafana.example.lc", "prox")
     await ext.add_instance("main", tabs=[
         _tabinfo(10 + i, url) for i, url in enumerate(urls)
     ])
@@ -1418,7 +1418,7 @@ async def test_under_threshold_executes_and_clears_a_stale_latch(tmp_path):
     db = await _mkdb(tmp_path)
     try:
         ext = Ext(db)
-        await _seed_fleet_with_phase_a(ext, db, ["https://grafana.lc/d/a"])
+        await _seed_fleet_with_phase_a(ext, db, ["https://grafana.example.lc/d/a"])
         await db.write(lambda c: set_setting(
             c, RESUME_PENDING_KEY, '{"since": 1, "plan": {"total": 99}}'))
 
@@ -1443,20 +1443,20 @@ async def test_over_threshold_defers_countables_but_runs_phase_b(tmp_path):
     db = await _mkdb(tmp_path)
     try:
         ext = Ext(db)
-        await _seed_rule(db, "grafana.lc", "prox")
+        await _seed_rule(db, "grafana.example.lc", "prox")
         # Two ruled idle tabs => countable phase_a = 2 (> threshold 1) ...
         await ext.add_instance("main", tabs=[
-            _tabinfo(10, "https://grafana.lc/d/a"),
-            _tabinfo(11, "https://grafana.lc/d/b"),
+            _tabinfo(10, "https://grafana.example.lc/d/a"),
+            _tabinfo(11, "https://grafana.example.lc/d/b"),
             # ... plus the SOURCE of an in-flight relocation whose copy is already
             # open in prox — the phase-B half that must keep moving.
-            _tabinfo(77, "https://grafana.lc/d/c"),
+            _tabinfo(77, "https://grafana.example.lc/d/c"),
         ])
-        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.lc/d/c")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/c")])
         await _seed_relocate(
             db, instance_from="main", instance_to="prox", tab_id=77,
             session_id_from="s", tab_id_to=99, session_id_to="s",
-            url="https://grafana.lc/d/c", url_norm="https://grafana.lc/d/c",
+            url="https://grafana.example.lc/d/c", url_norm="https://grafana.example.lc/d/c",
         )
         sent_cmds = []
 
@@ -1464,7 +1464,7 @@ async def test_over_threshold_defers_countables_but_runs_phase_b(tmp_path):
             sent_cmds.append(cmd)
             if cmd == protocol.CMD_GET_TAB:
                 return {"ok": True, "result": {"tab": {"id": params["tabId"],
-                                                       "url": "https://grafana.lc/d/c"}}}
+                                                       "url": "https://grafana.example.lc/d/c"}}}
             if cmd == protocol.CMD_CLOSE_TAB:
                 return {"ok": True, "result": {"ok": True}}
             return {"ok": True, "result": {}}
@@ -1502,7 +1502,7 @@ async def test_two_over_threshold_passes_refresh_the_latch(tmp_path):
     try:
         ext = Ext(db)
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
         s = _settings(max_actions_per_pass=1)
 
         res1 = await ext.run_pass(settings=s)
@@ -1511,7 +1511,7 @@ async def test_two_over_threshold_passes_refresh_the_latch(tmp_path):
         assert latch1["plan"]["total"] == 2
 
         # The world grows between passes: a third ruled tab appears.
-        ext.tabs["main"].append(_tabinfo(30, "https://grafana.lc/d/z"))
+        ext.tabs["main"].append(_tabinfo(30, "https://grafana.example.lc/d/z"))
         res2 = await ext.run_pass(settings=s)
         assert res2["status"] == "resume_pending"
         latch2 = json.loads(await _latch_raw(db))
@@ -1529,7 +1529,7 @@ async def test_confirm_pending_executes_the_recomputed_plan_and_clears(tmp_path)
     try:
         ext = Ext(db)
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
         s = _settings(max_actions_per_pass=1)
 
         assert (await ext.run_pass(settings=s))["status"] == "resume_pending"
@@ -1555,7 +1555,7 @@ async def test_run_all_executes_over_threshold_in_one_pass_without_latching(tmp_
         ext = Ext(db)
         # Two ruled idle tabs => countable phase_a = 2 (> threshold 1).
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
         s = _settings(max_actions_per_pass=1)
 
         res = await ext.run_pass(settings=s, run_all=True)
@@ -1574,7 +1574,7 @@ async def test_over_threshold_without_run_all_still_latches(tmp_path):
     try:
         ext = Ext(db)
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
         s = _settings(max_actions_per_pass=1)
 
         res = await ext.run_pass(settings=s)
@@ -1593,7 +1593,7 @@ async def test_run_all_clears_an_already_armed_latch(tmp_path):
     try:
         ext = Ext(db)
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
         s = _settings(max_actions_per_pass=1)
 
         assert (await ext.run_pass(settings=s))["status"] == "resume_pending"
@@ -1616,7 +1616,7 @@ async def test_confirm_pending_without_latch_degrades_and_still_latches(tmp_path
     try:
         ext = Ext(db)
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
         assert not await _latch_raw(db)
 
         res = await ext.run_pass(
@@ -1635,8 +1635,8 @@ async def test_phase_b_only_plans_never_latch(tmp_path):
     db = await _mkdb(tmp_path)
     try:
         ext = Ext(db)
-        await _seed_rule(db, "grafana.lc", "prox")
-        urls = [f"https://grafana.lc/d/{x}" for x in ("a", "b", "c")]
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        urls = [f"https://grafana.example.lc/d/{x}" for x in ("a", "b", "c")]
         await ext.add_instance("main", tabs=[
             _tabinfo(20 + i, url) for i, url in enumerate(urls)
         ])
@@ -1676,7 +1676,7 @@ async def test_stopped_state_blocks_the_pass(tmp_path):
     db = await _mkdb(tmp_path)
     try:
         ext = Ext(db)
-        await _seed_fleet_with_phase_a(ext, db, ["https://grafana.lc/d/a"])
+        await _seed_fleet_with_phase_a(ext, db, ["https://grafana.example.lc/d/a"])
         now = runner._now_ms()
         await db.write(lambda c: pause_ops.stop(c, now=now))
 
@@ -1721,7 +1721,7 @@ async def test_countable_equal_to_threshold_executes_fully(tmp_path):
     try:
         ext = Ext(db)
         await _seed_fleet_with_phase_a(
-            ext, db, ["https://grafana.lc/d/a", "https://grafana.lc/d/b"])
+            ext, db, ["https://grafana.example.lc/d/a", "https://grafana.example.lc/d/b"])
 
         res = await ext.run_pass(settings=_settings(max_actions_per_pass=2))
         assert res["status"] == "ok"
@@ -1741,8 +1741,8 @@ async def test_armed_latch_pass_journals_no_deferrals_and_merges_no_windows(tmp_
     db = await _mkdb(tmp_path)
     try:
         ext = Ext(db)
-        await _seed_rule(db, "grafana.lc", "prox")
-        await _seed_rule(db, "kibana.lc", "ghost")
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        await _seed_rule(db, "kibana.example.lc", "ghost")
         # `ghost` exists as an ACTIVE instances row (so the rule stays valid) but never
         # connects: its tab journals a target_not_ready deferral on a normal pass.
         await db.write(lambda c: c.execute(
@@ -1751,10 +1751,10 @@ async def test_armed_latch_pass_journals_no_deferrals_and_merges_no_windows(tmp_
             "main",
             tabs=[
                 # Two ruled idle tabs => countable phase_a = 2 (> threshold 1).
-                _tabinfo(10, "https://grafana.lc/d/a"),
-                _tabinfo(11, "https://grafana.lc/d/b"),
+                _tabinfo(10, "https://grafana.example.lc/d/a"),
+                _tabinfo(11, "https://grafana.example.lc/d/b"),
                 # Ruled to the unconnected `ghost` => a deferral candidate.
-                _tabinfo(12, "https://kibana.lc/d/c"),
+                _tabinfo(12, "https://kibana.example.lc/d/c"),
                 # An idle unruled-on-main tab alone in window 2. It is NOT a merge
                 # source: step 9 skips `main` unconditionally (#41). Kept as the
                 # control — main's second window must survive both passes below.
@@ -1770,8 +1770,8 @@ async def test_armed_latch_pass_journals_no_deferrals_and_merges_no_windows(tmp_
         await ext.add_instance(
             "prox",
             tabs=[
-                _tabinfo(40, "https://grafana.lc/d/p1", window_id=1),
-                _tabinfo(41, "https://grafana.lc/d/p2", window_id=2),
+                _tabinfo(40, "https://grafana.example.lc/d/p1", window_id=1),
+                _tabinfo(41, "https://grafana.example.lc/d/p2", window_id=2),
             ],
             windows=[{"id": 1, "type": "normal", "state": "normal"},
                      {"id": 2, "type": "normal", "state": "normal"}],

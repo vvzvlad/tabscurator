@@ -64,13 +64,13 @@ def _decide(mirror, ready):
 
 # --- HEADLINE: a singleton-ruled tab opened away-from-home is RELOCATED ------
 def test_singleton_in_foreign_instance_relocated_not_closed():
-    # rule grafana.lc -> prox, singleton. prox holds /d/abc; the human opened a
+    # rule grafana.example.lc -> prox, singleton. prox holds /d/abc; the human opened a
     # DIFFERENT dashboard /d/xyz in main and left it idle. It must be RELOCATED to
     # prox, never closed out of main as a "copy" of /d/abc (§7 non-conflation).
-    rules = [_rule(1, "grafana.lc", "prox", singleton=1)]
+    rules = [_rule(1, "grafana.example.lc", "prox", singleton=1)]
     tabs = [
-        _tab("prox", 10, "https://grafana.lc/d/abc"),
-        _tab("main", 20, "https://grafana.lc/d/xyz"),
+        _tab("prox", 10, "https://grafana.example.lc/d/abc"),
+        _tab("main", 20, "https://grafana.example.lc/d/xyz"),
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
 
@@ -83,13 +83,13 @@ def test_singleton_in_foreign_instance_relocated_not_closed():
 
 # --- step 7 q2: dedup is by the FULL url string, never the normalized one ----
 def test_q2_dedup_full_url_not_normalized():
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     # prox already holds /d/abc?x=1. Two main tabs: an EXACT full-url match (dedupe)
     # and a query-only-different one (a genuinely different tab => relocate).
     tabs = [
-        _tab("prox", 10, "https://grafana.lc/d/abc?x=1"),
-        _tab("main", 20, "https://grafana.lc/d/abc?x=1"),   # exact => dedupe_close
-        _tab("main", 21, "https://grafana.lc/d/abc?y=2"),   # different full => relocate
+        _tab("prox", 10, "https://grafana.example.lc/d/abc?x=1"),
+        _tab("main", 20, "https://grafana.example.lc/d/abc?x=1"),   # exact => dedupe_close
+        _tab("main", 21, "https://grafana.example.lc/d/abc?y=2"),   # different full => relocate
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
 
@@ -111,10 +111,10 @@ def test_two_identical_sources_one_phase_a_other_deferred_no_same_pass_collapse(
     # singleton-closed against the OTHER's not-yet-created copy — the copies do not
     # exist in the frozen mirror (§7 phase-A exclusion). The deferred tab WAITS; it is
     # not closed.
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     tabs = [
-        _tab("main", 20, "https://grafana.lc/d/abc"),
-        _tab("main", 21, "https://grafana.lc/d/abc"),
+        _tab("main", 20, "https://grafana.example.lc/d/abc"),
+        _tab("main", 21, "https://grafana.example.lc/d/abc"),
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert [d.tab.tab_id for d in res.phase_a] == [20]      # only the first opens
@@ -129,10 +129,10 @@ def test_two_identical_sources_to_main_do_not_both_open():
     # copy the curator opens there survives forever, and next pass's question (b) cannot
     # catch it either (phase B already closed both sources). Drop the per-pass
     # (target, url) set and this reddens with two phase-A opens into main.
-    rules = [_rule(1, "grafana.lc", "main")]
+    rules = [_rule(1, "grafana.example.lc", "main")]
     tabs = [
-        _tab("prox", 20, "https://grafana.lc/d/abc"),
-        _tab("prox", 21, "https://grafana.lc/d/abc"),
+        _tab("prox", 20, "https://grafana.example.lc/d/abc"),
+        _tab("prox", 21, "https://grafana.example.lc/d/abc"),
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert [d.tab.tab_id for d in res.phase_a] == [20]
@@ -142,10 +142,10 @@ def test_two_identical_sources_to_main_do_not_both_open():
 def test_two_DIFFERENT_urls_to_same_target_both_open():
     # The gate is per (target, FULL url), not per target: two different urls headed for
     # the same instance must BOTH open in one pass (else every relocation serializes).
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     tabs = [
-        _tab("main", 20, "https://grafana.lc/d/abc"),
-        _tab("main", 21, "https://grafana.lc/d/xyz"),
+        _tab("main", 20, "https://grafana.example.lc/d/abc"),
+        _tab("main", 21, "https://grafana.example.lc/d/xyz"),
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert sorted(d.tab.tab_id for d in res.phase_a) == [20, 21]
@@ -156,19 +156,19 @@ def test_two_DIFFERENT_urls_to_same_target_both_open():
 def test_orphan_beats_a_broader_valid_rule_on_the_specificity_ladder():
     """The specificity ladder (§8) must run ONCE, across valid and orphaned rules alike.
 
-    ``*.borneo.lc -> prox`` is valid; the more specific ``www.borneo.lc -> ghost`` was
+    ``*.alpha.example.lc -> prox`` is valid; the more specific ``www.alpha.example.lc -> ghost`` was
     orphaned (its instance retired). Before the flag the ladder picks the longer pattern,
     the home is unreachable, and the tab is DEFERRED — untouched. Asking the valid rules
-    first and only then the orphans runs the ladder twice: ``*.borneo.lc`` wins by
+    first and only then the orphans runs the ladder twice: ``*.alpha.example.lc`` wins by
     default and the tab is relocated into ``prox`` — a home the owner never chose for it,
     triggered by retiring an unrelated instance. Reddens under that two-step lookup:
     phase_a becomes [(20, 'prox')] and deferred is empty.
     """
     rules = [
-        _rule(1, "*.borneo.lc", "prox"),
-        _rule(2, "www.borneo.lc", "ghost", invalid=1),
+        _rule(1, "*.alpha.example.lc", "prox"),
+        _rule(2, "www.alpha.example.lc", "ghost", invalid=1),
     ]
-    tabs = [_tab("main", 20, "https://www.borneo.lc/page")]
+    tabs = [_tab("main", 20, "https://www.alpha.example.lc/page")]
     res = _decide(
         _mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"}
     )
@@ -181,10 +181,10 @@ def test_broader_orphan_does_not_shadow_a_more_specific_valid_rule():
     """The mirror image: when the VALID rule is the more specific one it still wins, so
     flagging a broad orphan does not freeze everything underneath it."""
     rules = [
-        _rule(1, "*.borneo.lc", "ghost", invalid=1),
-        _rule(2, "www.borneo.lc", "prox"),
+        _rule(1, "*.alpha.example.lc", "ghost", invalid=1),
+        _rule(2, "www.alpha.example.lc", "prox"),
     ]
-    tabs = [_tab("main", 20, "https://www.borneo.lc/page")]
+    tabs = [_tab("main", 20, "https://www.alpha.example.lc/page")]
     res = _decide(
         _mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"}
     )
@@ -198,10 +198,10 @@ def test_orphaned_rule_defers_instead_of_draining_to_main():
     not vacuous. Reddens if orphans are excluded from matching: the tab routes to main.
     """
     rules = [
-        _rule(1, "grafana.lc", "ghost", invalid=1),
+        _rule(1, "grafana.example.lc", "ghost", invalid=1),
         _rule(2, "other.lc", "prox"),   # keeps has_active_rules() true => drain on
     ]
-    tabs = [_tab("prox", 20, "https://grafana.lc/d/x")]
+    tabs = [_tab("prox", 20, "https://grafana.example.lc/d/x")]
     res = _decide(
         _mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"}
     )
@@ -211,7 +211,7 @@ def test_orphaned_rule_defers_instead_of_draining_to_main():
 
 # --- unruled tab in main lives forever --------------------------------------
 def test_unruled_in_main_lives():
-    rules = [_rule(1, "grafana.lc", "prox")]  # rules exist (drain on)
+    rules = [_rule(1, "grafana.example.lc", "prox")]  # rules exist (drain on)
     tabs = [_tab("main", 20, "https://random.example/page")]
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"})
     assert res.is_empty()
@@ -227,7 +227,7 @@ def test_empty_rules_drain_off():
 
 def test_invalid_only_rules_drain_off():
     # A rule table with only an invalid rule is "empty" for the drain (§8).
-    rules = [_rule(1, "grafana.lc", "prox", invalid=1)]
+    rules = [_rule(1, "grafana.example.lc", "prox", invalid=1)]
     tabs = [_tab("prox", 20, "https://random.example/page")]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert res.is_empty()
@@ -235,31 +235,31 @@ def test_invalid_only_rules_drain_off():
 
 # --- step-4 close guards apply to EVERY kind --------------------------------
 def test_pinned_blocks_relocation():
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x", pinned=1)]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x", pinned=1)]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert res.is_empty()
     # Sanity: drop the pin and it DOES relocate (proves the guard is what blocked).
-    tabs2 = [_tab("main", 20, "https://grafana.lc/d/x", pinned=0)]
+    tabs2 = [_tab("main", 20, "https://grafana.example.lc/d/x", pinned=0)]
     res2 = _decide(_mirror(tabs2, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert len(res2.phase_a) == 1
 
 
 def test_audible_blocks_close():
     # An audible duplicate inside a non-main home must NOT be closed (§7 guard).
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     tabs = [
-        _tab("prox", 10, "https://grafana.lc/d/abc"),
-        _tab("prox", 11, "https://grafana.lc/d/abc", audible=1),  # dup, but audible
+        _tab("prox", 10, "https://grafana.example.lc/d/abc"),
+        _tab("prox", 11, "https://grafana.example.lc/d/abc", audible=1),  # dup, but audible
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     assert res.closes == []
 
 
 def test_active_in_focus_blocks():
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     # active AND its window is the instance's focused window => on screen => skip.
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x", active=1, window_id=7)]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x", active=1, window_id=7)]
     inst = _inst("main", focused_window_id=7)
     res = _decide(_mirror(tabs, [inst, _inst("prox")], rules,
                           windows={("main", 7): ("normal", "normal")}), {"prox", "main"})
@@ -267,8 +267,8 @@ def test_active_in_focus_blocks():
 
 
 def test_fullscreen_window_blocks():
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x", window_id=9)]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x", window_id=9)]
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules,
                           windows={("main", 9): ("normal", "fullscreen")}), {"prox", "main"})
     assert res.is_empty()
@@ -276,8 +276,8 @@ def test_fullscreen_window_blocks():
 
 def test_missing_window_skips_tab():
     # §6: a tab whose window is absent from the snapshot is skipped in the pass.
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x", window_id=5)]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x", window_id=5)]
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules,
                           windows={}), {"prox", "main"})  # NO window rows
     assert res.is_empty()
@@ -288,16 +288,16 @@ def test_missing_window_skips_tab():
 
 
 def test_not_idle_blocks():
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x", last_active_at=NOW - 60_000)]  # 1 min
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x", last_active_at=NOW - 60_000)]  # 1 min
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"prox", "main"})
     assert res.is_empty()
 
 
 def test_active_quarantine_and_exemption_block():
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x")]
-    norm = "https://grafana.lc/d/x"
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x")]
+    norm = "https://grafana.example.lc/d/x"
     q = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules,
                         quarantine=[("main", norm, NOW + HOUR)]), {"prox", "main"})
     assert q.is_empty()
@@ -315,16 +315,16 @@ def test_phase_b_source_url_mismatch_abandons_and_redecides():
     # A live relocate row whose SOURCE now holds a DIFFERENT url: the human moved it.
     # => abandon the row (source_url_mismatch), and the moved tab re-decides THIS pass
     # (here it matches another rule and relocates). The target is NOT verified.
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     reloc = RelocRow(
         id=500, instance_from="main", session_id_from="s", tab_id=20,
         instance_to="prox", session_id_to="s", tab_id_to=99,
-        url="https://grafana.lc/d/OLD", url_norm="https://grafana.lc/d/OLD",
-        rule_id=1, rule_pattern="grafana.lc",
+        url="https://grafana.example.lc/d/OLD", url_norm="https://grafana.example.lc/d/OLD",
+        rule_id=1, rule_pattern="grafana.example.lc",
         src_opened_at=0, src_last_active_at=NOW - 2 * HOUR, src_age_unknown=0,
     )
     # tab 20 now shows a DIFFERENT (still grafana) url.
-    tabs = [_tab("main", 20, "https://grafana.lc/d/NEW")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/NEW")]
     res = _decide(
         _mirror(tabs, [_inst("main"), _inst("prox")], rules, relocs=[reloc]),
         {"main", "prox"},
@@ -336,15 +336,15 @@ def test_phase_b_source_url_mismatch_abandons_and_redecides():
 
 
 def test_phase_b_source_matches_owns_and_verifies():
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     reloc = RelocRow(
         id=501, instance_from="main", session_id_from="s", tab_id=20,
         instance_to="prox", session_id_to="s", tab_id_to=99,
-        url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
-        rule_id=1, rule_pattern="grafana.lc",
+        url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
+        rule_id=1, rule_pattern="grafana.example.lc",
         src_opened_at=0, src_last_active_at=NOW - 2 * HOUR, src_age_unknown=0,
     )
-    tabs = [_tab("main", 20, "https://grafana.lc/d/abc")]  # source still holds the url
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/abc")]  # source still holds the url
     res = _decide(
         _mirror(tabs, [_inst("main"), _inst("prox")], rules, relocs=[reloc]),
         {"main", "prox"},
@@ -359,7 +359,7 @@ def test_phase_b_source_gone_abandons():
     reloc = RelocRow(
         id=502, instance_from="main", session_id_from="s", tab_id=20,
         instance_to="prox", session_id_to="s", tab_id_to=99,
-        url="https://grafana.lc/d/abc", url_norm="https://grafana.lc/d/abc",
+        url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
         rule_id=None, rule_pattern=None,
         src_opened_at=0, src_last_active_at=NOW - 2 * HOUR, src_age_unknown=0,
     )
@@ -372,8 +372,8 @@ def test_phase_b_source_gone_abandons():
 
 # --- deferred when the target is not ready ----------------------------------
 def test_deferred_when_target_not_ready():
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x")]
     # prox is NOT in ready => the relocation is deferred, not opened.
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main"})
     assert res.phase_a == []
@@ -382,10 +382,10 @@ def test_deferred_when_target_not_ready():
 
 # --- intra-instance exact dedup only in NON-main ----------------------------
 def test_intra_dedup_nonmain_only():
-    rules = [_rule(1, "grafana.lc", "prox")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
     tabs = [
-        _tab("prox", 10, "https://grafana.lc/d/abc", last_active_at=NOW - 2 * HOUR),
-        _tab("prox", 11, "https://grafana.lc/d/abc", last_active_at=NOW - 3 * HOUR),  # older => loses
+        _tab("prox", 10, "https://grafana.example.lc/d/abc", last_active_at=NOW - 2 * HOUR),
+        _tab("prox", 11, "https://grafana.example.lc/d/abc", last_active_at=NOW - 3 * HOUR),  # older => loses
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     dedupes = [d for d in res.closes if d.decision == "dedupe"]
@@ -399,18 +399,18 @@ def test_main_is_a_sink_no_intra_dedup():
         _tab("main", 10, "https://x.example/p"),
         _tab("main", 11, "https://x.example/p"),
     ]
-    rules = [_rule(1, "grafana.lc", "prox")]  # rules exist, but these are unruled
+    rules = [_rule(1, "grafana.example.lc", "prox")]  # rules exist, but these are unruled
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"})
     assert res.is_empty()
 
 
 # --- singleton ladder keeps the winner --------------------------------------
 def test_singleton_keeps_ladder_winner():
-    rules = [_rule(1, "grafana.lc", "prox", singleton=1)]
+    rules = [_rule(1, "grafana.example.lc", "prox", singleton=1)]
     tabs = [
-        _tab("prox", 10, "https://grafana.lc/d/a", last_active_at=NOW - 3 * HOUR),
-        _tab("prox", 11, "https://grafana.lc/d/b", last_active_at=NOW - 2 * HOUR),  # newest => wins
-        _tab("prox", 12, "https://grafana.lc/d/c", last_active_at=NOW - 4 * HOUR),
+        _tab("prox", 10, "https://grafana.example.lc/d/a", last_active_at=NOW - 3 * HOUR),
+        _tab("prox", 11, "https://grafana.example.lc/d/b", last_active_at=NOW - 2 * HOUR),  # newest => wins
+        _tab("prox", 12, "https://grafana.example.lc/d/c", last_active_at=NOW - 4 * HOUR),
     ]
     res = _decide(_mirror(tabs, [_inst("prox"), _inst("main")], rules), {"prox", "main"})
     closed = sorted(d.tab.tab_id for d in res.closes if d.decision == "singleton")
@@ -420,7 +420,7 @@ def test_singleton_keeps_ladder_winner():
 
 # --- unready source instance's tabs are not considered ----------------------
 def test_unready_source_tabs_skipped():
-    rules = [_rule(1, "grafana.lc", "prox")]
-    tabs = [_tab("main", 20, "https://grafana.lc/d/x")]
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [_tab("main", 20, "https://grafana.example.lc/d/x")]
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"prox"})  # main NOT ready
     assert res.is_empty()

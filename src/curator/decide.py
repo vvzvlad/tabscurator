@@ -180,10 +180,10 @@ def compile_match_candidates(rules) -> list:
     home" and wrong for "does this tab have a home at all". Matching the two sets
     SEPARATELY (valid first, orphans only if nothing valid matched) is wrong too: it
     silently runs the specificity ladder twice, and the ladder is not composable that
-    way. With ``*.borneo.lc -> prox`` (valid) and ``www.borneo.lc -> ghost`` (orphaned),
-    a tab on ``www.borneo.lc`` matches BOTH; the ladder says the longer, more specific
-    ``www.borneo.lc`` wins, so before the flag the tab is deferred to an unreachable
-    ``ghost`` — but a valid-first lookup finds ``*.borneo.lc`` and relocates the tab into
+    way. With ``*.alpha.example.lc -> prox`` (valid) and ``www.alpha.example.lc -> ghost`` (orphaned),
+    a tab on ``www.alpha.example.lc`` matches BOTH; the ladder says the longer, more specific
+    ``www.alpha.example.lc`` wins, so before the flag the tab is deferred to an unreachable
+    ``ghost`` — but a valid-first lookup finds ``*.alpha.example.lc`` and relocates the tab into
     ``prox``, a home the owner never chose for it, the moment an unrelated instance is
     retired.
 

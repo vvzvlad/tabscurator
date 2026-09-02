@@ -154,10 +154,10 @@ def _validate_url(url) -> str:
 
     Non-negotiable because of HOW the pass matches: it compares
     ``normalize_url(exemption.url) == normalize_url(tab.url)``, and ``normalize_url``
-    is ``urlsplit``-based. A scheme-less ``grafana.lc/d/1`` — exactly what Chrome's
+    is ``urlsplit``-based. A scheme-less ``grafana.example.lc/d/1`` — exactly what Chrome's
     address bar shows and a human copies — parses with an empty scheme and host, the
-    whole string landing in ``path``, so it normalises to ``grafana.lc/d/1`` and can
-    never equal a live tab's ``https://grafana.lc/d/1``.
+    whole string landing in ``path``, so it normalises to ``grafana.example.lc/d/1`` and can
+    never equal a live tab's ``https://grafana.example.lc/d/1``.
 
     Accepting it would produce a 201, a row that ``GET /api/exemptions`` proudly lists as
     active, and a next pass that closes the very tab the human just protected: the

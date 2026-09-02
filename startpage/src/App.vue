@@ -377,7 +377,7 @@ export default {
 
     // A CONFIRMATION IS BOUND TO THE EXACT RULE THAT WAS PREVIEWED (§8). The draft is
     // v-model-bound, so any keystroke can turn the armed rule into a different one:
-    // preview `borneo.lc` (2 relocations, 0 closures), get the 409, widen the pattern to
+    // preview `alpha.example.lc` (2 relocations, 0 closures), get the 409, widen the pattern to
     // `corp.example` (300/120), click "Подтвердить и сохранить" — and confirm_impact
     // would go out for a rule whose impact the server never showed, with the stale 2/0
     // still on screen. That is exactly the echo-confirmation the gate exists to stop.

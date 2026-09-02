@@ -115,7 +115,7 @@ describe("rules editor: a gated change explains WHY it is gated", () => {
     const wrapper = mount(App, { props: { deps: { chromeApi: env.chrome, fetchFn, now: () => NOW } } });
     await flushPromises();
     const form = wrapper.find('[data-role="rule-form"]');
-    await form.find('input[name="pattern"]').setValue("borneo.lc");
+    await form.find('input[name="pattern"]').setValue("alpha.example.lc");
     await form.find('input[name="instance_id"]').setValue("themed");
     await form.trigger("submit");
     await flushPromises();
@@ -343,7 +343,7 @@ describe("rules editor: delete confirm gate (§8)", () => {
 // --- §8: a confirmation belongs to the rule that was PREVIEWED ----------------
 describe("rules editor: an edited draft cannot ride an old confirmation (§8)", () => {
   it("editing the pattern after a 409 disarms the confirm and drops the stale impact", async () => {
-    // The bypass: preview `borneo.lc` (2/0) => 409 arms the button; widen the pattern to
+    // The bypass: preview `alpha.example.lc` (2/0) => 409 arms the button; widen the pattern to
     // `corp.example` (300/120) and click "Подтвердить и сохранить" => confirm_impact goes
     // out for a rule whose impact the server NEVER showed, with 2/0 still on screen. That
     // is the echo-confirmation §8's gate exists to stop.
@@ -371,7 +371,7 @@ describe("rules editor: an edited draft cannot ride an old confirmation (§8)", 
     await flushPromises();
 
     const form = wrapper.find('[data-role="rule-form"]');
-    await form.find('input[name="pattern"]').setValue("borneo.lc");
+    await form.find('input[name="pattern"]').setValue("alpha.example.lc");
     await form.find('input[name="instance_id"]').setValue("themed");
     await form.trigger("submit");
     await flushPromises();
@@ -435,7 +435,7 @@ describe("rules editor: an edited draft cannot ride an old confirmation (§8)", 
     await flushPromises();
 
     const form = wrapper.find('[data-role="rule-form"]');
-    await form.find('input[name="pattern"]').setValue("borneo.lc");
+    await form.find('input[name="pattern"]').setValue("alpha.example.lc");
     await form.find('input[name="instance_id"]').setValue("themed");
     form.trigger("submit"); // NOT awaited: the request is parked below
     await flushPromises();
@@ -447,7 +447,7 @@ describe("rules editor: an edited draft cannot ride an old confirmation (§8)", 
     releaseFirst();
     await flushPromises();
 
-    // The 409 for `borneo.lc` must NOT arm a confirm for `corp.example`.
+    // The 409 for `alpha.example.lc` must NOT arm a confirm for `corp.example`.
     expect(wrapper.find('[data-role="rule-save"]').text()).toBe("Сохранить");
     // ...and the stale 2/0 impact must not be on screen next to it.
     expect(wrapper.find('[data-role="rule-preview-out"]').exists()).toBe(false);
@@ -477,7 +477,7 @@ describe("rules editor: an edited draft cannot ride an old confirmation (§8)", 
     await flushPromises();
 
     const form = wrapper.find('[data-role="rule-form"]');
-    await form.find('input[name="pattern"]').setValue("borneo.lc");
+    await form.find('input[name="pattern"]').setValue("alpha.example.lc");
     await form.find('input[name="instance_id"]').setValue("themed");
     await form.trigger("submit");
     await flushPromises();
@@ -509,7 +509,7 @@ describe("rules editor: an edited draft cannot ride an old confirmation (§8)", 
     await flushPromises();
 
     const form = wrapper.find('[data-role="rule-form"]');
-    await form.find('input[name="pattern"]').setValue("borneo.lc");
+    await form.find('input[name="pattern"]').setValue("alpha.example.lc");
     await form.find('input[name="instance_id"]').setValue("themed");
     await form.trigger("submit");
     await flushPromises();
@@ -542,7 +542,7 @@ describe("rules editor: an edited draft cannot ride an old confirmation (§8)", 
     await flushPromises();
 
     const form = wrapper.find('[data-role="rule-form"]');
-    await form.find('input[name="pattern"]').setValue("borneo.lc");
+    await form.find('input[name="pattern"]').setValue("alpha.example.lc");
     await form.find('input[name="instance_id"]').setValue("themed");
     await form.trigger("submit");
     await flushPromises();

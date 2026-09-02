@@ -87,7 +87,7 @@ def test_post_creates_and_refreshes_by_instance_and_url(tmp_path):
         _seed_instance(db_path, "prox")
         r = client.post(
             "/api/exemptions", headers=AUTH,
-            json={"instance_id": "prox", "url": "https://grafana.lc/d/1", "minutes": 30},
+            json={"instance_id": "prox", "url": "https://grafana.example.lc/d/1", "minutes": 30},
         )
         assert r.status_code == 201
         ex = r.json()["exemption"]
@@ -99,7 +99,7 @@ def test_post_creates_and_refreshes_by_instance_and_url(tmp_path):
         # (instance_id, url), so "extend it by another hour" must not grow a duplicate.
         r2 = client.post(
             "/api/exemptions", headers=AUTH,
-            json={"instance_id": "prox", "url": "https://grafana.lc/d/1",
+            json={"instance_id": "prox", "url": "https://grafana.example.lc/d/1",
                   "minutes": 600, "reason": "renovating"},
         )
         assert r2.status_code == 201
@@ -232,14 +232,14 @@ def test_a_posted_exemption_is_honoured_by_the_pass_step4_guard(tmp_path):
         until = _now_ms() + 600_000
         client.post(
             "/api/exemptions", headers=AUTH,
-            json={"instance_id": "prox", "url": "https://grafana.lc/d/1", "until": until},
+            json={"instance_id": "prox", "url": "https://grafana.example.lc/d/1", "until": until},
         )
         rows = client.get("/api/exemptions", headers=AUTH).json()["exemptions"]
 
         now = _now_ms()
         tab = SimpleNamespace(
             instance_id="prox", tab_id=1, window_id=1,
-            url="https://grafana.lc/d/1?utm_source=x",     # same tab, different query
+            url="https://grafana.example.lc/d/1?utm_source=x",     # same tab, different query
             pinned=0, audible=0, active=0, age_unknown=0,
             last_active_at=now - 10 * 3600_000, opened_at=now - 10 * 3600_000,
         )
@@ -254,7 +254,7 @@ def test_a_posted_exemption_is_honoured_by_the_pass_step4_guard(tmp_path):
         # Non-vacuity: lift it and the very same tab becomes closable again.
         client.request(
             "DELETE", "/api/exemptions", headers=AUTH,
-            json={"instance_id": "prox", "url": "https://grafana.lc/d/1"},
+            json={"instance_id": "prox", "url": "https://grafana.example.lc/d/1"},
         )
         mirror.exemptions = [
             (e["instance_id"], e["url"], e["until"])
@@ -266,12 +266,12 @@ def test_a_posted_exemption_is_honoured_by_the_pass_step4_guard(tmp_path):
 # --- the URL must be one the pass can ever match ----------------------------
 def test_post_rejects_a_url_the_pass_could_never_match(tmp_path):
     """A scheme-less address is the one a human actually copies — Chrome's address bar
-    shows ``grafana.lc/d/1``, not ``https://grafana.lc/d/1``.
+    shows ``grafana.example.lc/d/1``, not ``https://grafana.example.lc/d/1``.
 
     The pass matches ``normalize_url(exemption.url) == normalize_url(tab.url)``, and
     ``normalize_url`` is ``urlsplit``-based: without a scheme the whole string lands in
-    ``path`` and normalises to ``grafana.lc/d/1``, which can never equal the live tab's
-    ``https://grafana.lc/d/1``. Accepting it produced a 201 and a row ``GET`` lists as
+    ``path`` and normalises to ``grafana.example.lc/d/1``, which can never equal the live tab's
+    ``https://grafana.example.lc/d/1``. Accepting it produced a 201 and a row ``GET`` lists as
     ACTIVE, while the next pass closed the very tab the human had just protected.
 
     The test proves the failure it prevents, not just the status code: the rejected
@@ -279,15 +279,15 @@ def test_post_rejects_a_url_the_pass_could_never_match(tmp_path):
     from src.db.actions import normalize_url
 
     # The concrete trap, stated as an assertion rather than as prose.
-    assert normalize_url("grafana.lc/d/1") != normalize_url("https://grafana.lc/d/1")
+    assert normalize_url("grafana.example.lc/d/1") != normalize_url("https://grafana.example.lc/d/1")
 
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
         _seed_instance(db_path, "prox")
         for bad in (
-            "grafana.lc/d/1",          # the copied-from-the-address-bar case
-            "//grafana.lc/d/1",        # scheme-relative
+            "grafana.example.lc/d/1",          # the copied-from-the-address-bar case
+            "//grafana.example.lc/d/1",        # scheme-relative
             "file:///etc/passwd",      # not http(s)
             "javascript:alert(1)",
             "data:text/html,x",
@@ -305,7 +305,7 @@ def test_post_rejects_a_url_the_pass_could_never_match(tmp_path):
         # "reject everything".
         assert client.post(
             "/api/exemptions", headers=AUTH,
-            json={"instance_id": "prox", "url": "https://grafana.lc/d/1", "minutes": 30},
+            json={"instance_id": "prox", "url": "https://grafana.example.lc/d/1", "minutes": 30},
         ).status_code == 201
 
 
@@ -318,7 +318,7 @@ def test_delete_rejects_the_same_shapes(tmp_path):
         _seed_instance(db_path, "prox")
         r = client.request(
             "DELETE", "/api/exemptions", headers=AUTH,
-            json={"instance_id": "prox", "url": "grafana.lc/d/1"},
+            json={"instance_id": "prox", "url": "grafana.example.lc/d/1"},
         )
         assert r.status_code == 422
 
