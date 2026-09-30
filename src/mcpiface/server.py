@@ -397,6 +397,46 @@ def build_mcp(app_ref) -> MCPServer:
         ))
 
     @mcp.tool()
+    async def execute_js_debugger(
+        instance: str, tab_id: int, code: str,
+        url_at_exec: str | None = None, timeout_ms: int | None = None,
+        max_bytes: int | None = None,
+        expected_session: str | None = None,
+    ) -> dict:
+        """Run JS in a tab via the DevTools-console path (§12: audited before send, gated by the
+        same JS & Debugger checkbox as execute_js).
+
+        WHEN TO REACH FOR IT: only when plain ``execute_js`` returns ``null`` (or an
+        unexplained empty result) on a page whose CSP ``script-src`` forbids ``'unsafe-eval'`` —
+        Fastmail, GitHub, many banks. There ``execute_js``'s indirect eval is blocked by the
+        page and answers a silent null; this runs the SAME code through a transient
+        ``chrome.debugger`` ``Runtime.evaluate`` (the DevTools console path), which the page's
+        CSP cannot forbid. On any ordinary page ``execute_js`` is the right tool.
+
+        COSTS, versus execute_js: it briefly attaches the debugger, so the browser shows the
+        «идёт отладка …» / "… is being debugged" banner for the duration and the attach is
+        detectable by anti-bot scripts — so prefer plain ``execute_js`` and fall back here only
+        on a CSP block. ``js_disabled`` if the checkbox is off; ``debugger_attach`` if the tab is
+        already held by focus emulation, a ws capture, a screenshot or another
+        execute_js_debugger. There is NO ``world`` and NO ``await_promise``: the code always runs
+        in the page's default (MAIN) context with REPL semantics (as in the DevTools console) —
+        top-level ``await`` works and the last expression's value is returned, but a bare top-level
+        ``return`` is a SyntaxError, so use an expression, not ``return``.
+
+        The result is FLAT ``value`` (a value chrome could not clone arrives as
+        ``{__unserializable, preview}`` instead of a silent null), capped at ``max_bytes``
+        (default 40000) with ``truncated`` + ``total_bytes``. ``timeout_ms`` sets the evaluation
+        deadline — a non-terminating snippet is terminated at it so it cannot leave the debugger
+        attached — clamped to EXECUTE_JS_MAX_TIMEOUT_MS and defaulting to CMD_TIMEOUT_MS. Refused
+        while paused."""
+        return await _guarded(tools.execute_js_debugger(
+            _host(), instance=instance, tab_id=tab_id, code=code,
+            url_at_exec=url_at_exec, timeout_ms=timeout_ms,
+            max_bytes=max_bytes, auth_ctx=current_mcp_session(),
+            expected_session=expected_session,
+        ))
+
+    @mcp.tool()
     async def get_text(instance: str, tab_id: int, selector: str | None = None,
                        max_bytes: int | None = None,
                        expected_session: str | None = None) -> dict:

@@ -154,6 +154,10 @@ export function createChromeMock(opts = {}) {
     captureVisibleTabResult: opts.captureVisibleTabResult || null,
     captureVisibleTabError: opts.captureVisibleTabError || null,
     captureScreenshotData: opts.captureScreenshotData || "QkJCQg==",
+    // execute_js_debugger: the object `Runtime.evaluate` answers with on the DEBUGGER path. The
+    // default mirrors a serializable `null` result ({result:{value:null}}); a test overrides it to
+    // return a value, an exceptionDetails (the code threw), or an unserializable RemoteObject.
+    runtimeEvaluateResult: opts.runtimeEvaluateResult || { result: { value: null } },
     scriptResults: opts.scriptResults || [{ result: null }], // scripting.executeScript return
     // ⚠️ DEFERRED COMMIT, opt-in. Real `tabs.update({url})` does NOT change `tab.url`:
     // until the navigation commits, `tabs.get` answers the PREVIOUS url and the target
@@ -425,6 +429,12 @@ export function createChromeMock(opts = {}) {
         // screenshot's DEBUGGER path (§6): Page.captureScreenshot answers `{data: <base64>}`.
         if (method === "Page.captureScreenshot") {
           return { data: state.captureScreenshotData };
+        }
+        // execute_js_debugger's DEBUGGER path (§12): Runtime.evaluate answers the canned result
+        // (value / exceptionDetails / unserializable RemoteObject). `sendCommandError` above still
+        // throws first, modelling a CDP-level failure of the evaluate call.
+        if (method === "Runtime.evaluate") {
+          return state.runtimeEvaluateResult;
         }
         return {};
       },

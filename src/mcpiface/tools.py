@@ -973,6 +973,62 @@ async def execute_js(app, *, instance: str, tab_id: int, code: str,
     return {"ok": True, **_flatten_injection_results(result.get("results"), max_bytes)}
 
 
+async def execute_js_debugger(app, *, instance: str, tab_id: int, code: str,
+                              url_at_exec: str | None = None, timeout_ms: int | None = None,
+                              max_bytes: int | None = None,
+                              auth_ctx: str | None = None,
+                              expected_session: str | None = None) -> dict:
+    """Run JS in a tab via the chrome.debugger console path — the CSP-bypass twin of
+    :func:`execute_js` (§12). ``execute_js`` runs the code with an injected indirect eval,
+    which the page's CSP ``script-src`` ``'unsafe-eval'`` can forbid (Fastmail, GitHub, many
+    banks) — there the code silently answers ``null``. This runs the SAME code through a
+    transient ``chrome.debugger`` ``Runtime.evaluate``, which is NOT subject to the page CSP.
+
+    Audited identically to ``execute_js``: ``send_command`` writes the js_audit row BEFORE the
+    send (``initiator='mcp'`` + the MCP ``auth_ctx``), and the extension's JS & Debugger checkbox
+    gates it at the edge. Refused while paused.
+
+    There is NO ``world`` choice — Runtime.evaluate runs in the page's default (MAIN) execution
+    context only — and the evaluation ALWAYS awaits a resulting promise. It runs with REPL semantics
+    (as in the DevTools console): the last expression's value is returned and top-level ``await``
+    works, but a bare top-level ``return`` is a SyntaxError — use an expression, not ``return``.
+    ``timeout_ms`` sets the CDP evaluation deadline (a non-terminating snippet is terminated at it so
+    it cannot leave the debugger attached), clamped to EXECUTE_JS_MAX_TIMEOUT_MS and defaulting to the
+    global CMD_TIMEOUT_MS when omitted; the socket then waits a little longer, so the real error rather
+    than a premature timeout reaches the caller. The FLAT ``value`` is capped at ``max_bytes``."""
+    await _ensure_not_paused(app)
+    budget = _clamp_timeout_ms(app, timeout_ms)
+    # VALIDATE BEFORE THE ROUND TRIP, exactly like execute_js: a bad max_bytes would otherwise cost
+    # a full command AND a durable js_audit row recording code that was never going to be delivered.
+    _validate_max_bytes(max_bytes)
+    # ``world="cdp"`` + ``awaitPromise=True`` are stamped so the js_audit row is HONEST about how the
+    # code ran — this verb offers no MAIN/ISOLATED choice and always awaits, so both are constants,
+    # not caller params. send_command reads them straight out of the frame params for the row.
+    #
+    # ``timeoutMs`` is the CDP ``Runtime.evaluate`` deadline the extension enforces: without it a
+    # non-terminating snippet (an infinite loop, or an unresolved promise under awaitPromise) would
+    # hang the debugger call forever, leaving the debugger attached and wedging the tab. It MUST be a
+    # concrete positive value even when the caller named no ``timeout_ms`` (``budget is None`` — the
+    # most common call): the default is the global ``CMD_TIMEOUT_MS``, the very budget ``_command``
+    # would otherwise wait on the socket.
+    cdp_deadline = budget if budget is not None else app.state.settings.cmd_timeout_ms
+    params: dict = {
+        "tabId": tab_id, "code": code, "world": "cdp", "awaitPromise": True,
+        "timeoutMs": cdp_deadline,
+    }
+    if url_at_exec is not None:
+        params["urlAtExec"] = url_at_exec
+    # Give the SOCKET slack over the CDP deadline — the same ordering ``_wait_budget_ms`` enforces for
+    # the wait verbs: V8 terminates the evaluation at ``cdp_deadline``, then the extension still needs
+    # to detach and round-trip the exceptionDetails, so the caller sees the real precondition_failed
+    # rather than a premature socket ``timeout``.
+    result = await _command(app, instance, protocol.CMD_EXECUTE_JS_DEBUGGER, params,
+                            auth_ctx=auth_ctx, expected_session=expected_session,
+                            cmd_timeout_ms=_wait_budget_ms(app, cdp_deadline))
+    value, meta = truncate_payload(result.get("value"), max_bytes)
+    return {"ok": True, "value": value, **meta}
+
+
 async def get_text(app, *, instance: str, tab_id: int, selector: str | None = None,
                    max_bytes: int | None = None, auth_ctx: str | None = None,
                    expected_session: str | None = None) -> dict:

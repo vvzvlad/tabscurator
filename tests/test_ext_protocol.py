@@ -226,6 +226,8 @@ def test_command_verbs_mirror_the_extension_exactly():
         "wake_tab",
         # screenshot: the picture twin of get_text — hybrid captureVisibleTab / Page.captureScreenshot.
         "screenshot",
+        # execute_js_debugger: CSP-bypass twin of execute_js — chrome.debugger Runtime.evaluate.
+        "execute_js_debugger",
     }
 
 

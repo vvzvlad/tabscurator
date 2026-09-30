@@ -796,6 +796,120 @@ async def test_execute_js_audited_with_mcp_session_as_auth_ctx(tmp_path):
     assert code == "1+1" and outcome == "ok" and url == "https://a"
 
 
+# --- execute_js_debugger: the CSP-bypass twin, audited identically (§12) ------
+async def test_execute_js_debugger_audited_like_execute_js(tmp_path):
+    """The debugger twin writes the SAME js_audit row execute_js does, before the send.
+
+    It also stamps world='cdp' + awaitPromise=True unconditionally (there is no MCP-surface
+    choice), so the audit row is honest about the execution context and that it awaited.
+    """
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    out, frame = await _run_with_response(
+        lambda: tools.execute_js_debugger(
+            app, instance="main", tab_id=2, code="document.title",
+            url_at_exec="https://a", auth_ctx="mcp-session-xyz",
+        ),
+        cs, ws, {"value": "T"},  # the extension returns ok({value})
+    )
+    assert out == {"ok": True, "value": "T"}
+    assert frame["command"] == protocol.CMD_EXECUTE_JS_DEBUGGER
+    # No world / awaitPromise params on the MCP surface: the frame ALWAYS carries the constants.
+    assert frame["params"]["world"] == "cdp"
+    assert frame["params"]["awaitPromise"] is True
+    rows = await db.read(lambda c: c.execute(
+        "SELECT initiator, auth_ctx, code, outcome, url_at_exec, world, await_promise FROM js_audit"
+    ).fetchall())
+    assert len(rows) == 1
+    initiator, auth_ctx, code, outcome, url, world, await_promise = rows[0]
+    assert initiator == "mcp" and auth_ctx == "mcp-session-xyz"
+    assert code == "document.title" and outcome == "ok" and url == "https://a"
+    assert world == "cdp" and await_promise == 1
+
+
+async def test_execute_js_debugger_refused_while_paused_sends_nothing(tmp_path):
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    await tools.pause(app)
+    with pytest.raises(tools.ToolError) as ei:
+        await tools.execute_js_debugger(app, instance="main", tab_id=2, code="x", auth_ctx="s")
+    assert ei.value.code == "stopped"
+    assert ws.sent == []
+    # Refused BEFORE the audit-writing send, so no row either.
+    assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM js_audit").fetchone()) == (0,)
+
+
+async def test_execute_js_debugger_returns_a_flat_value_and_caps_it(tmp_path):
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    # Under the cap: the flat value passes straight through.
+    out, _frame = await _run_with_response(
+        lambda: tools.execute_js_debugger(_app(db, reg), instance="main", tab_id=2, code="1"),
+        cs, ws, {"value": {"title": "T"}},
+    )
+    assert out == {"ok": True, "value": {"title": "T"}}
+    # Over the cap: trimmed, reporting truncated + total_bytes (the SAME cap execute_js applies).
+    out2, _f2 = await _run_with_response(
+        lambda: tools.execute_js_debugger(_app(db, reg), instance="main", tab_id=2, code="1",
+                                          max_bytes=8),
+        cs, ws, {"value": "a" * 40},
+    )
+    assert out2["value"] == "a" * 8
+    assert out2["truncated"] is True and out2["total_bytes"] == 40
+
+
+async def test_execute_js_debugger_bad_max_bytes_is_refused_BEFORE_the_round_trip(tmp_path):
+    """No frame on the socket, and no js_audit row — the same guard execute_js has."""
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    for bad in (0, -1):
+        with pytest.raises(tools.ToolError) as exc:
+            await tools.execute_js_debugger(_app(db, reg), instance="main", tab_id=2, code="1",
+                                            max_bytes=bad)
+        assert exc.value.code == "invalid_args"
+    assert ws.sent == []
+    assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM js_audit").fetchone()) == (0,)
+
+
+async def test_execute_js_debugger_carries_the_budget_as_timeout_ms(tmp_path):
+    """The command budget is carried to the extension as ``timeoutMs`` so it can bound the CDP
+    Runtime.evaluate itself — a hung evaluation cannot leave the debugger attached and wedge the tab.
+    The value is the clamped budget, so timeout_ms flows through to the deadline."""
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    expected = tools._clamp_timeout_ms(app, 5000)
+    _out, frame = await _run_with_response(
+        lambda: tools.execute_js_debugger(app, instance="main", tab_id=2, code="1",
+                                          timeout_ms=5000, auth_ctx="s"),
+        cs, ws, {"value": 1},
+    )
+    assert frame["params"]["timeoutMs"] == expected
+
+
+async def test_execute_js_debugger_default_call_still_bounds_the_evaluation(tmp_path):
+    """The most common call omits ``timeout_ms``. The frame must STILL carry a concrete positive CDP
+    deadline (the global CMD_TIMEOUT_MS) — otherwise a non-terminating snippet would hang the debugger
+    call forever and wedge the tab. Regression guard for the default path."""
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    _out, frame = await _run_with_response(
+        lambda: tools.execute_js_debugger(app, instance="main", tab_id=2, code="1", auth_ctx="s"),
+        cs, ws, {"value": 1},
+    )
+    assert frame["params"]["timeoutMs"] == app.state.settings.cmd_timeout_ms
+    assert frame["params"]["timeoutMs"] > 0
+
+
 # --- scroll_until: FIXED verb, wait-budget socket, snake_case shape ----------
 async def test_scroll_until_sends_command_and_renames_shape(tmp_path):
     db = await _make_db(tmp_path)

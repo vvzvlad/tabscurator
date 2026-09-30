@@ -149,6 +149,12 @@ export const CMD_FOCUS_WINDOW = "focus_window";
 export const CMD_NAVIGATE_TAB = "navigate_tab";
 export const CMD_MERGE_WINDOWS = "merge_windows";
 export const CMD_EXECUTE_JS = "execute_js";
+// CDP twin of execute_js: run the code via a TRANSIENT chrome.debugger attach ->
+// Runtime.evaluate -> detach (the DevTools-console path), which is NOT subject to the
+// page's CSP `script-src` `'unsafe-eval'`. Use it on pages where execute_js's indirect
+// eval is blocked (Fastmail, GitHub, many banks). Same "JS & Debugger" checkbox gate,
+// same §12 audit; runs in the page's default (MAIN) execution context only.
+export const CMD_EXECUTE_JS_DEBUGGER = "execute_js_debugger";
 // Move ONE tab to a window/position inside THIS browser. Relocation BETWEEN
 // browsers is an open+close pair (§7) — that works only because the instances are
 // separate processes; between the windows of one instance there was nothing at

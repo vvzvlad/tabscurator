@@ -35,6 +35,7 @@ from src.ext import protocol
 # never drift apart.
 _AUDITED_COMMANDS = (
     protocol.CMD_EXECUTE_JS,
+    protocol.CMD_EXECUTE_JS_DEBUGGER,
     protocol.CMD_START_JS,
     protocol.CMD_START_WS_CAPTURE,
 )
@@ -177,11 +178,14 @@ async def send_command(
     # GUARDRAIL — the ``_AUDITED_COMMANDS`` tuple below (used at BOTH the db-None fail-closed
     # check and the audit-before-send check) is the ALLOWLIST of verbs that carry arbitrary code
     # OR ship page data out, and therefore MUST write a ``js_audit`` row before the send. There
-    # are THREE now: ``execute_js`` / ``start_js`` (arbitrary caller code) and ``start_ws_capture``
-    # (data-bearing — it opens a durable read channel onto a tab's WebSocket traffic, i.e. a
-    # messenger's conversation). ``start_ws_capture`` has no caller code of its own, so its audit
-    # row carries a synthetic ``code`` marker (``[ws_capture:start]``) that the MCP layer supplies
-    # — what the row fixes is WHO opened the channel, WHEN and on WHICH tab.
+    # are FOUR now: ``execute_js`` / ``execute_js_debugger`` / ``start_js`` (arbitrary caller code)
+    # and ``start_ws_capture`` (data-bearing — it opens a durable read channel onto a tab's
+    # WebSocket traffic, i.e. a messenger's conversation). ``execute_js_debugger`` is the CSP-bypass
+    # twin of ``execute_js`` — it runs the SAME arbitrary code via a chrome.debugger Runtime.evaluate
+    # instead of an injected eval, so it is audited identically. ``start_ws_capture`` has no caller
+    # code of its own, so its audit row carries a synthetic ``code`` marker (``[ws_capture:start]``)
+    # that the MCP layer supplies — what the row fixes is WHO opened the channel, WHEN and on WHICH
+    # tab.
     #
     # Fixed-function / benign verbs (set_focus_emulation, get_text, wait_for, read_ws_frames,
     # stop_ws_capture, screenshot, …) are outside it ON PURPOSE — they reconstruct no code and open

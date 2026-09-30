@@ -51,6 +51,10 @@ CMD_FOCUS_WINDOW = "focus_window"
 CMD_NAVIGATE_TAB = "navigate_tab"
 CMD_MERGE_WINDOWS = "merge_windows"
 CMD_EXECUTE_JS = "execute_js"
+# CDP twin of execute_js: the extension runs the code through a TRANSIENT chrome.debugger
+# attach -> Runtime.evaluate -> detach (the DevTools-console path), which bypasses the page's
+# CSP `script-src` `'unsafe-eval'`. Same checkbox gate and same §12 audit as execute_js.
+CMD_EXECUTE_JS_DEBUGGER = "execute_js_debugger"
 # Move ONE tab to a window/position inside a SINGLE browser. Relocation BETWEEN
 # instances is the open+close pair of §7, which works only because the browsers are
 # separate processes; between the windows of one browser there was no verb at all.
