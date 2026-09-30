@@ -1176,8 +1176,10 @@ worker умирает через 30 с и внутренний таймер не
 | `merge_windows` | `{windowIds?, targetWindowId?}` | `{merged: n}` — пустой объект только для ручной кнопки (§9) |
 | `move_tab` | `{tabId, windowId: int\|null, index?}` | `{tabId, windowId, index}` / `pinned_cross_window` / `no_window` |
 | `execute_js` | `{code, tabId?, world?, awaitPromise?}` | `{results}` / `js_disabled` |
+| `execute_js_debugger` | `{tabId, code, world:"cdp", awaitPromise:true}` — `world`/`awaitPromise` не выбираются на MCP-поверхности, всегда эти значения (для честного аудита) | `{value}` / `js_disabled` / `precondition_failed` / `debugger_attach` — CSP-двойник `execute_js` через `chrome.debugger` `Runtime.evaluate` (§12) |
 | `get_text` | `{tabId, selector?, maxBytes?}` | `{text, truncated?, totalBytes?}` / `precondition_failed` |
 | `set_input` | `{tabId, selector, value}` | `{kind}`, `kind∈{input,contenteditable}` / `precondition_failed` |
+| `click` | `{tabId, selector}` | `{ok}` / `precondition_failed` — фикс-функция клика, двойник `set_input` (§12) |
 | `wait_for` | `{tabId, urlMatches?\|selector?\|textContains?, timeoutMs}` | `{matched, elapsedMs}` — `matched:false` при истечении срока |
 | `scroll_until` | `{tabId, countSelector, containerSelector?, direction?, targetCount?, stableRounds?, intervalMs?, timeoutMs, focus?}` | `{count, rounds, stopped, elapsedMs}`, `stopped∈{stable,target,deadline}` |
 | `start_js` | `{tabId, code, world?, jobId, awaitPromise}` — `awaitPromise` всегда `true` (джоба всегда исполняется как awaited async-тело) | `{jobId}` / `js_disabled` |
@@ -1195,7 +1197,14 @@ worker умирает через 30 с и внутренний таймер не
 (`start_ws_capture`/`read_ws_frames`/`stop_ws_capture`) — **волна 21 (§16)**, первые
 data-несущие вербы этого пути; `set_input` — **волна 23 (§16)**, фиксированный ПИШУЩИЙ верб;
 `wake_tab` — **волна 24 (§16)**, пробуждение выгруженной вкладки (issue #68); `screenshot` —
-**волна 25 (§16)**, картинка-двойник `get_text` (гибрид cheap/debugger).
+**волна 25 (§16)**, картинка-двойник `get_text` (гибрид cheap/debugger); `execute_js_debugger` —
+**волна 26 (§16)**, CSP-двойник `execute_js`: тот же произвольный код исполняется через
+**транзитный** `chrome.debugger` `Runtime.evaluate` (путь консоли DevTools), который **не** подчинён
+CSP-директиве страницы `script-src 'unsafe-eval'` — там, где `execute_js` молча отдаёт `null`
+(Fastmail, GitHub, многие банки). Тот же чекбокс «JS & Debugger» и та же строка `js_audit` (§12);
+исполняется только в дефолтном (MAIN) контексте страницы. Жизненный цикл — как у debugger-пути
+`screenshot`: attach → одна команда → detach (сессия не удерживается), взаимоисключение с фокус-
+эмуляцией / WS-перехватом / скриншотом по правилу «один debugger-клиент на вкладку».
 
 **`tab_discarded` — честный код вместо манифест-ошибки (§12, #68).** Браузер, экономя память,
 **выгружает** простаивающую вкладку из RAM (`tab.discarded === true`). Такая вкладка **существует**
@@ -1245,6 +1254,17 @@ no-op. **Фиксированное действие** (reload, не произ�
 ОТБРОСИТЬ — это базовое покрытие обычных `contenteditable`/textbox-композеров, не их.
 Селектор, не нашедший элемента, не разобравшийся или указавший на не-редактируемый элемент,
 — `precondition_failed`.
+
+**`click` — фиксированный, но МУТАЦИЯ (двойник `set_input`).** Жмёт элемент по селектору
+одним вызовом: `selector` — **данные** для `querySelector`, исходником в eval не становится,
+поэтому галочки `execute_js` не требует и строку `js_audit` не пишет; но это **запись**, потому
+на сервисе — **под стоп-гейтом** (`_ensure_not_paused`), ровно как `set_input`. Тело
+`clickInWorld` диспатчит pointerdown/mousedown, pointerup/mouseup и **последним** зовёт нативный
+`.click()` (реальное действие по умолчанию — переход по ссылке, submit формы), так что
+SPA/React-кнопки реагируют. Работает на страницах с CSP, запрещающим `eval`
+(accounts.spotify.com), потому что инъекция `chrome.scripting` не подчинена `script-src` страницы.
+**Отключённый** контрол — `precondition_failed` (клик по нему — молчаливый no-op, честнее
+отказать); селектор, не нашедший элемента или не разобравшийся, — тоже `precondition_failed`.
 
 **`set_focus_emulation` — первый верб через `chrome.debugger` (§12).** Переключает
 `Emulation.setFocusEmulationEnabled`: фоновая вкладка ведёт себя как в фокусе (без
@@ -3631,6 +3651,17 @@ MCP не работала бы ни одна: превью живёт в UI и �
   чей код хотя бы завершается в пределах одного блокирующего вызова. (start_js всегда
   оборачивает код в awaited async-IIFE и `await fn()`, поэтому в `js_audit` у него всегда
   `awaitPromise:true` — не-await-пути, о котором можно было бы соврать, у него нет.)
+  ⚠️ `execute_js_debugger` (волна 26) несёт **тот же** произвольный код, что `execute_js`, и
+  потому идёт **той же** дорогой: галочка «JS & Debugger» на краю, `js_audit` до отправки,
+  fail-closed при отсутствии БД (в `_AUDITED_COMMANDS` рядом с `execute_js`/`start_js`). Разница
+  только в **как исполняется**: не косвенный eval `chrome.scripting`, а **транзитный**
+  `chrome.debugger` `Runtime.evaluate` (путь консоли DevTools), который **не** подчинён CSP
+  страницы `script-src 'unsafe-eval'` — на Fastmail/GitHub/многих банках `execute_js` молча
+  отдаёт `null`, а этот путь исполняет код. Выбора `world`/`await_promise` на MCP-поверхности нет:
+  MCP-слой всегда штампует `world:"cdp"` + `awaitPromise:true` в кадр (и, значит, в строку
+  `js_audit`), чтобы аудит был честен о контексте и о том, что промис дожидались. Debugger не
+  удерживается: attach → один `Runtime.evaluate` → detach, взаимоисключение по «один
+  debugger-клиент на вкладку» с фокус-эмуляцией/WS-перехватом/скриншотом.
 - **Фиксированные вербы наблюдения (`get_text`, `wait_for`, `scroll_until`, `poll_job`)
   галочки `execute_js` и записи в `js_audit` НЕ несут** — и это
   следствие обоснования гейта, а не исключение из него. (`screenshot` тоже `js_audit` не

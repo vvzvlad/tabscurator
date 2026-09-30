@@ -112,6 +112,8 @@ def test_mcp_tools_list_exposes_every_phase11_tool(tmp_path):
         # The fixed-but-mutating write verb: a fixed body (no checkbox / audit) that is still
         # pause-gated on the service side, like navigate_tab.
         "set_input",
+        # click: the fixed-but-mutating click twin of set_input (no checkbox / audit, pause-gated).
+        "click",
         "list_exemptions", "set_exemption", "clear_exemption",
         # The long-running agent verbs (wave 19): the scroll scheduler and the Job-API pair.
         "scroll_until", "start_js", "poll_job",

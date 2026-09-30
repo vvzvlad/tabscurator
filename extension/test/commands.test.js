@@ -5,6 +5,7 @@ import {
   evalInWorld,
   readTextInWorld,
   setInputInWorld,
+  clickInWorld,
   matchInWorld,
   rectInWorld,
   scrollAndCountInWorld,
@@ -24,9 +25,11 @@ import {
   CMD_NAVIGATE_TAB,
   CMD_MERGE_WINDOWS,
   CMD_EXECUTE_JS,
+  CMD_EXECUTE_JS_DEBUGGER,
   CMD_MOVE_TAB,
   CMD_GET_TEXT,
   CMD_SET_INPUT,
+  CMD_CLICK,
   CMD_WAIT_FOR,
   CMD_SCROLL_UNTIL,
   CMD_START_JS,
@@ -2389,6 +2392,213 @@ describe("set_input", () => {
   });
 });
 
+// --- click: the FIXED-but-MUTATING click (§12) -------------------------------
+// A DOM environment for clickInWorld. The injected body constructs MouseEvent / PointerEvent (for
+// the dispatched activation events) and reads `window` (the events' `view`), none of which the node
+// test runtime provides — so the harness installs doubles and restores them afterwards. The element
+// double records every dispatched event's type AND the native `.click()` into one `env.events` array
+// (in order), so a test can PROVE the native click fires LAST, after the dispatched mouse/pointer
+// events. `env.clickSpy` / `env.focusSpy` back the "was it clicked / focused" assertions.
+function withClickEnv(fn) {
+  const saved = {
+    document: globalThis.document,
+    window: globalThis.window,
+    MouseEvent: globalThis.MouseEvent,
+    PointerEvent: globalThis.PointerEvent,
+  };
+  const events = [];
+  class FakeMouseEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.bubbles = !!init.bubbles;
+      this.button = init.button;
+      this.buttons = init.buttons;
+    }
+  }
+  class FakePointerEvent extends FakeMouseEvent {
+    constructor(type, init = {}) {
+      super(type, init);
+      this.pointerType = init.pointerType;
+      this.isPrimary = init.isPrimary;
+    }
+  }
+  globalThis.window = {};
+  globalThis.MouseEvent = FakeMouseEvent;
+  globalThis.PointerEvent = FakePointerEvent;
+
+  const clickSpy = vi.fn();
+  const focusSpy = vi.fn();
+  const makeEl = (extra = {}) => ({
+    dispatchEvent(ev) {
+      events.push(ev.type);
+      return true;
+    },
+    focus() {
+      focusSpy();
+      this._focused = true;
+    },
+    click() {
+      clickSpy();
+      events.push("click"); // the NATIVE click, recorded in the same order stream as the events
+    },
+    ...extra,
+  });
+
+  const env = {
+    events,
+    clickSpy,
+    focusSpy,
+    // An ordinary clickable element (no `disabled` property → `el.disabled === true` is false).
+    button: () => makeEl(),
+    // A disabled control: the body must refuse it before dispatching anything.
+    disabled: () => makeEl({ disabled: true }),
+    setDoc(matches = {}, bad = []) {
+      globalThis.document = {
+        querySelector: (sel) => {
+          if (bad.includes(sel)) {
+            const e = new Error(`'${sel}' is not a valid selector`);
+            e.name = "SyntaxError";
+            throw e;
+          }
+          return sel in matches ? matches[sel] : null;
+        },
+      };
+    },
+  };
+  try {
+    return fn(env);
+  } finally {
+    globalThis.document = saved.document;
+    globalThis.window = saved.window;
+    globalThis.MouseEvent = saved.MouseEvent;
+    globalThis.PointerEvent = saved.PointerEvent;
+  }
+}
+
+describe("clickInWorld — click's injected body", () => {
+  it("dispatches mousedown, mouseup, then the NATIVE click LAST, and returns ok", () => {
+    withClickEnv((env) => {
+      const el = env.button();
+      env.setDoc({ "#save": el });
+      const res = clickInWorld("#save");
+      expect(res).toEqual({ ok: true });
+      expect(el._focused).toBe(true);
+      // The native .click() (the real default action — nav / submit) fires AFTER the dispatched
+      // mouse/pointer events the frameworks listen for.
+      expect(env.clickSpy).toHaveBeenCalledTimes(1);
+      expect(env.events).toEqual(["pointerdown", "mousedown", "pointerup", "mouseup", "click"]);
+      // The load-bearing ordering: mousedown BEFORE mouseup BEFORE the native click.
+      const order = env.events.filter((t) => ["mousedown", "mouseup", "click"].includes(t));
+      expect(order).toEqual(["mousedown", "mouseup", "click"]);
+    });
+  });
+
+  it("a selector that matches NOTHING is found:false, never a click", () => {
+    withClickEnv((env) => {
+      env.setDoc({});
+      expect(clickInWorld("#nope")).toEqual({ found: false });
+      expect(env.clickSpy).not.toHaveBeenCalled();
+      expect(env.events).toEqual([]);
+    });
+  });
+
+  it("a MALFORMED selector is reported as a value, never a throw", () => {
+    // A throw is indistinguishable from a torn-down frame; the typo has to travel as data so the
+    // dispatcher can map it to precondition_failed rather than let it escape as `internal`.
+    withClickEnv((env) => {
+      env.setDoc({}, ["#a:has(>"]);
+      const got = clickInWorld("#a:has(>");
+      expect(got.badSelector).toBe(true);
+      expect(got.message).toMatch(/not a valid selector/);
+    });
+  });
+
+  it("REFUSES a disabled control as disabled, never a click", () => {
+    withClickEnv((env) => {
+      env.setDoc({ "#save": env.disabled() });
+      expect(clickInWorld("#save")).toEqual({ disabled: true });
+      // A disabled button swallows a click as a silent no-op — refuse honestly, dispatch nothing.
+      expect(env.clickSpy).not.toHaveBeenCalled();
+      expect(env.events).toEqual([]);
+    });
+  });
+});
+
+describe("click", () => {
+  it("runs with the execute_js checkbox OFF — a fixed function is not eval (§12)", async () => {
+    // The verb clicks the page (a mutation, pause-gated on the service side), but its BODY is fixed
+    // and takes only DATA, so the extension edge needs no execute_js checkbox.
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { ok: true } }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a" }), ctx());
+    expect(res).toEqual({ ok: true, result: {} });
+  });
+
+  it("passes the selector to the FIXED function, never a code string", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { ok: true } }];
+    const exec = vi.spyOn(chrome.scripting, "executeScript");
+    await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#save" }), ctx());
+    const injection = exec.mock.calls[0][0];
+    expect(injection.args).toEqual(["#save"]);
+    expect(typeof injection.func).toBe("function");
+  });
+
+  it("a MALFORMED selector is precondition_failed, not `internal`", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [
+      { result: { badSelector: true, message: "'#a:has(>' is not a valid selector" } },
+    ];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a:has(>" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toContain("#a:has(>");
+  });
+
+  it("a selector that matched nothing => precondition_failed", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { found: false } }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#nope" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toContain("#nope");
+  });
+
+  it("a disabled element => precondition_failed", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { disabled: true } }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#save" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toMatch(/disabled/);
+  });
+
+  it("an EMPTY injected result (torn-down/re-injected frame) => internal, not a false ok", async () => {
+    // The native `.click()` can navigate (a link / a submit button), which tears the frame down
+    // mid-inject and answers with no `result` — got={}. Without the positive-flag check that would
+    // fall through to ok({}) as a silent false success; it must be `internal` instead.
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: undefined }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("internal");
+  });
+
+  it("keeps execute_js's http/https target guard (§12)", async () => {
+    chromeWithOneTab5("file:///etc/passwd");
+    const exec = vi.spyOn(chrome.scripting, "executeScript");
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a" }), ctx());
+    expect(res.error.code).toBe("precondition_failed");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("a vanished tab is no_such_tab, not internal", async () => {
+    chromeWithOneTab5();
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 999, selector: "#a" }), ctx());
+    expect(res.error.code).toBe("no_such_tab");
+  });
+});
+
 // --- wait_for ----------------------------------------------------------------
 // A fake clock whose SLEEP is what advances time: the poll loop then runs to its deadline
 // instantly and deterministically, instead of spending real seconds.
@@ -4021,6 +4231,7 @@ describe("tab_discarded guard (#68)", () => {
   const fixedVerbs = [
     ["get_text", CMD_GET_TEXT, { tabId: 5 }],
     ["set_input", CMD_SET_INPUT, { tabId: 5, selector: "#a", value: "x" }],
+    ["click", CMD_CLICK, { tabId: 5, selector: "#a" }],
     ["scroll_until", CMD_SCROLL_UNTIL, { tabId: 5, countSelector: ".m", timeoutMs: 1000 }],
     ["poll_job", CMD_POLL_JOB, { tabId: 5, jobId: "job-1" }],
     ["wait_for selector", CMD_WAIT_FOR, { tabId: 5, selector: ".ready", timeoutMs: 1000 }],
@@ -4657,5 +4868,217 @@ describe("screenshot (§6) — debugger path (background tab)", () => {
     expect(attach).not.toHaveBeenCalled(); // refused up front — one client per tab
     const shot = await held.finish();
     expect(shot.ok).toBe(true);
+  });
+});
+
+// --- execute_js_debugger (§12): the CSP-bypass twin of execute_js -------------
+//
+// Runs the SAME arbitrary code as execute_js, but through a TRANSIENT chrome.debugger attach ->
+// Runtime.evaluate -> detach (the DevTools-console path), which the page's CSP `unsafe-eval` cannot
+// forbid. Same JS & Debugger checkbox gate; the transient lifecycle mirrors screenshotDebugger
+// (attach, one command, detach in a finally — the session is NEVER held).
+describe("execute_js_debugger (chrome.debugger Runtime.evaluate)", () => {
+  it("checkbox OFF (default) => js_disabled and the debugger is NOT touched", async () => {
+    chromeWithOneTab();
+    const attach = vi.spyOn(chrome.debugger, "attach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1+1" }),
+      ctx(),
+    );
+    expect(res).toEqual({ ok: false, error: { code: "js_disabled", message: expect.any(String) } });
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("a vanished tab is no_such_tab, and the debugger is not touched", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    const attach = vi.spyOn(chrome.debugger, "attach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 999, code: "1" }),
+      ctx(),
+    );
+    expect(res.error.code).toBe("no_such_tab");
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("a discarded tab is tab_discarded (checkbox ON), and the debugger is not touched", async () => {
+    chromeWithOneTab("https://x/", { discarded: true });
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    const attach = vi.spyOn(chrome.debugger, "attach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1" }),
+      ctx(),
+    );
+    expect(res.error.code).toBe("tab_discarded");
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("a non-http tab is precondition_failed (the debugger never attaches privileged pages)", async () => {
+    chromeWithOneTab("file:///etc/passwd");
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    const attach = vi.spyOn(chrome.debugger, "attach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1" }),
+      ctx(),
+    );
+    expect(res.error.code).toBe("precondition_failed");
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("a tab held by focus emulation refuses with debugger_attach (one client per tab)", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    await dispatchCommand(frame(CMD_SET_FOCUS_EMULATION, { tabId: 5, enabled: true }), ctx());
+    const attach = vi.spyOn(chrome.debugger, "attach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1" }),
+      ctx(),
+    );
+    expect(res.error.code).toBe("debugger_attach");
+    expect(attach).not.toHaveBeenCalled(); // refused up front — the tab is someone else's
+  });
+
+  it("attach that throws (DevTools open / another client) => debugger_attach, untracked", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.debuggerAttachError = "Another debugger is already attached";
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1" }),
+      ctx(),
+    );
+    expect(res).toEqual({
+      ok: false,
+      error: { code: "debugger_attach", message: expect.any(String) },
+    });
+    expect(chrome.debugger._attached.has(5)).toBe(false);
+  });
+
+  it("SUCCESS: evaluates, returns the flat value, and DETACHES (the session is never held)", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.runtimeEvaluateResult = { result: { value: "OK" } };
+    const attach = vi.spyOn(chrome.debugger, "attach");
+    const send = vi.spyOn(chrome.debugger, "sendCommand");
+    const detach = vi.spyOn(chrome.debugger, "detach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "'O'+'K'" }),
+      ctx(),
+    );
+    expect(res).toEqual({ ok: true, result: { value: "OK" } });
+    expect(attach).toHaveBeenCalledWith({ tabId: 5 }, "1.3");
+    // Runs in the page's default (MAIN) context via Runtime.evaluate, returnByValue + awaitPromise.
+    expect(send).toHaveBeenCalledWith({ tabId: 5 }, "Runtime.evaluate", {
+      expression: "'O'+'K'",
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+      replMode: true,
+    });
+    expect(detach).toHaveBeenCalledWith({ tabId: 5 }); // transient — released, not held
+    expect(chrome.debugger._attached.has(5)).toBe(false);
+  });
+
+  it("a genuine null value is returned as null, not mistaken for unserializable", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.runtimeEvaluateResult = { result: { type: "object", subtype: "null", value: null } };
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "null" }),
+      ctx(),
+    );
+    expect(res).toEqual({ ok: true, result: { value: null } });
+  });
+
+  it("code that THREW (exceptionDetails) => precondition_failed, and the attach is still detached", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.runtimeEvaluateResult = {
+      result: { type: "object", subtype: "error" },
+      exceptionDetails: { text: "Uncaught", exception: { description: "ReferenceError: x is not defined" } },
+    };
+    const detach = vi.spyOn(chrome.debugger, "detach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "x" }),
+      ctx(),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toMatch(/ReferenceError/);
+    expect(detach).toHaveBeenCalledWith({ tabId: 5 }); // rolled back — the session is not held
+    expect(chrome.debugger._attached.has(5)).toBe(false);
+  });
+
+  it("a non-serializable result arrives as {__unserializable, preview}, not a silent null", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    // returnByValue leaves `value` UNSET for a handle it cannot clone (a DOM node) and describes it.
+    chrome.__state.runtimeEvaluateResult = {
+      result: { type: "object", className: "HTMLDivElement", description: "[object HTMLDivElement]" },
+    };
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "document.body" }),
+      ctx(),
+    );
+    expect(res.ok).toBe(true);
+    expect(res.result.value).toEqual({
+      __unserializable: "HTMLDivElement",
+      preview: "[object HTMLDivElement]",
+    });
+  });
+
+  it("a CDP-level sendCommand failure => precondition_failed, and the attach is still detached", async () => {
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.sendCommandError = "target crashed";
+    const detach = vi.spyOn(chrome.debugger, "detach");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1" }),
+      ctx(),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(detach).toHaveBeenCalledWith({ tabId: 5 }); // rolled back
+    expect(chrome.debugger._attached.has(5)).toBe(false);
+  });
+
+  it("forwards the command budget as the CDP `timeout`, so a hung snippet cannot wedge the tab", async () => {
+    // The service always carries the budget as `timeoutMs`; the extension turns it into the CDP
+    // `timeout` deadline so V8 terminates a non-terminating snippet instead of hanging forever.
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.runtimeEvaluateResult = { result: { value: 1 } };
+    const send = vi.spyOn(chrome.debugger, "sendCommand");
+    const res = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1", timeoutMs: 4000 }),
+      ctx(),
+    );
+    expect(res.ok).toBe(true);
+    expect(send).toHaveBeenCalledWith({ tabId: 5 }, "Runtime.evaluate", {
+      expression: "1",
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+      replMode: true,
+      timeout: 4000,
+    });
+  });
+
+  it("releases the tab after it finishes — a second debugger verb on the SAME tab is not refused", async () => {
+    // Proves the transient `evalDebuggerTabs` marker is cleared in the finally: a stale entry would
+    // wedge the tab and make this second attach refuse with debugger_attach (the brief's #1 risk).
+    chromeWithOneTab();
+    await chrome.storage.local.set({ allowExecuteJs: true });
+    chrome.__state.runtimeEvaluateResult = { result: { value: 1 } };
+    const first = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "1" }),
+      ctx(),
+    );
+    expect(first.ok).toBe(true);
+    const second = await dispatchCommand(
+      frame(CMD_EXECUTE_JS_DEBUGGER, { tabId: 5, code: "2" }),
+      ctx(),
+    );
+    expect(second).toEqual({ ok: true, result: { value: 1 } });
+    expect(chrome.debugger._attached.has(5)).toBe(false);
   });
 });

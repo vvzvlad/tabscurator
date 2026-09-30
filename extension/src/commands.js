@@ -32,9 +32,11 @@ import {
   CMD_NAVIGATE_TAB,
   CMD_MERGE_WINDOWS,
   CMD_EXECUTE_JS,
+  CMD_EXECUTE_JS_DEBUGGER,
   CMD_MOVE_TAB,
   CMD_GET_TEXT,
   CMD_SET_INPUT,
+  CMD_CLICK,
   CMD_WAIT_FOR,
   CMD_SCROLL_UNTIL,
   CMD_START_JS,
@@ -348,6 +350,59 @@ export function setInputInWorld(selector, value) {
   return { notEditable: true };
 }
 
+// The body injected by click. FIXED like setInputInWorld (§12): `selector` is DATA handed to
+// querySelector, nothing is spliced into an eval, so this verb needs no execute_js checkbox and
+// writes no js_audit row. It is still a MUTATION, which the SERVICE side gates behind the pause
+// switch (see click in tools.py); the extension applies the usual session + http/https edge guards.
+// It exists so a button can be pressed on a CSP-locked page (accounts.spotify.com forbids eval):
+// a chrome.scripting injection is not subject to the page's `script-src`, exactly like set_input.
+//
+// The activation sequence dispatches pointerdown/mousedown, then pointerup/mouseup, then calls the
+// element's NATIVE `.click()` LAST. The dispatched mouse/pointer events are what React and
+// Pointer-Events components listen for (a plain `.click()` alone often does not drive them), while
+// the native `.click()` is what fires the real DEFAULT ACTION — link navigation, form submit — that
+// a synthetic MouseEvent("click") does not. `.click()` runs last so the default action follows the
+// handlers the earlier events already triggered.
+//
+// A DISABLED control is REFUSED, not clicked: a disabled button swallows the click as a silent
+// no-op, so reporting success would be a lie — the same philosophy as set_input refusing a `value`
+// write to a checkbox. Returns a VALUE for every outcome (never a throw, same reason as
+// setInputInWorld — a throw is indistinguishable from a torn-down frame): `{badSelector, message}`
+// for a selector that does not parse, `{found:false}` for one that matches nothing, `{disabled:true}`
+// for a disabled control, and `{ok:true}` on success.
+export function clickInWorld(selector) {
+  let el;
+  try {
+    el = document.querySelector(selector);
+  } catch (e) {
+    // A malformed selector is the CALLER's typo, carried back as a value so the dispatcher can map
+    // it to precondition_failed rather than let it escape as `internal`.
+    if (e && e.name === "SyntaxError") {
+      return { badSelector: true, message: String((e && e.message) || e) };
+    }
+    throw e;
+  }
+  if (!el) return { found: false };
+  // A disabled control ignores a click. Refuse honestly instead of reporting a no-op as success.
+  if (el.disabled === true) return { disabled: true };
+  const down = { view: window, bubbles: true, cancelable: true, button: 0, buttons: 1 };
+  const up = { view: window, bubbles: true, cancelable: true, button: 0, buttons: 0 };
+  if (typeof PointerEvent === "function") {
+    el.dispatchEvent(new PointerEvent("pointerdown", { ...down, isPrimary: true, pointerType: "mouse" }));
+  }
+  el.dispatchEvent(new MouseEvent("mousedown", down));
+  if (typeof el.focus === "function") el.focus();
+  if (typeof PointerEvent === "function") {
+    el.dispatchEvent(new PointerEvent("pointerup", { ...up, isPrimary: true, pointerType: "mouse" }));
+  }
+  el.dispatchEvent(new MouseEvent("mouseup", up));
+  // Native .click() LAST — it fires the real default action (nav / submit) after the handlers the
+  // dispatched events already ran. Fall back to a synthetic click only if .click() is unavailable.
+  if (typeof el.click === "function") el.click();
+  else el.dispatchEvent(new MouseEvent("click", up));
+  return { ok: true };
+}
+
 // The body injected by wait_for's `selector` / `textContains` predicates, and by
 // navigate_tab's `waitUntil:'selector'`. Returns `{matched}` — or `{badSelector, message}`
 // for a selector that does not parse, which the caller must NOT mistake for "not yet".
@@ -609,6 +664,11 @@ export async function dispatchCommand(frame, ctx = {}) {
         return await moveTab(params, nowFn, map);
       case CMD_EXECUTE_JS:
         return await executeJs(params);
+      // CSP-bypass twin of execute_js (§12): same JS & Debugger checkbox and same js_audit row
+      // (service side), but runs the code via a TRANSIENT chrome.debugger Runtime.evaluate that the
+      // page's CSP `unsafe-eval` cannot forbid.
+      case CMD_EXECUTE_JS_DEBUGGER:
+        return await executeJsDebugger(params);
       // The two FIXED-function verbs (§12): no execute_js checkbox, no js_audit row —
       // see the comment above the injected bodies for why that separation is sound.
       case CMD_GET_TEXT:
@@ -617,6 +677,9 @@ export async function dispatchCommand(frame, ctx = {}) {
       // js_audit row — but it is a MUTATION, gated by the service-side pause switch.
       case CMD_SET_INPUT:
         return await setInput(params);
+      // click is a fixed-function MUTATION too: no checkbox/audit, pause-gated service-side.
+      case CMD_CLICK:
+        return await click(params);
       case CMD_WAIT_FOR:
         return await waitFor(params, nowFn, sleep);
       // scroll_until and poll_job are FIXED-function verbs too (§12): selectors/direction
@@ -1406,6 +1469,56 @@ async function setInput(params) {
     return fail(ERR_INTERNAL, "set_input got no result from the injected frame");
   }
   return ok({ kind: got.kind });
+}
+
+// click {tabId, selector} -> {} (ok).
+//
+// A FIXED injected function (clickInWorld), so — like set_input — NO execute_js checkbox and NO
+// js_audit row: the selector is DATA, not source. The http/https edge guard IS applied, exactly as
+// set_input/execute_js apply it. The MUTATION gate (pause/stop) lives on the SERVICE side (see click
+// in tools.py), which refuses before the frame is ever sent. It exists to press buttons on CSP-locked
+// pages (accounts.spotify.com forbids eval): a chrome.scripting injection bypasses the page's CSP.
+async function click(params) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(params.tabId);
+  } catch {
+    return fail(ERR_NO_SUCH_TAB, `no such tab: ${params.tabId}`);
+  }
+  const discarded = discardedFail(tab, params.tabId);
+  if (discarded) return discarded;
+  if (!isHttpUrl(tab.url)) {
+    return fail(ERR_PRECONDITION_FAILED, "click target is not an http/https tab");
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: params.tabId },
+    func: clickInWorld,
+    args: [params.selector],
+  });
+  const got = ((results || [])[0] || {}).result || {};
+  if (got.badSelector) {
+    return fail(
+      ERR_PRECONDITION_FAILED,
+      `invalid CSS selector ${JSON.stringify(params.selector)}: ${got.message}`,
+    );
+  }
+  if (got.found === false) {
+    return fail(
+      ERR_PRECONDITION_FAILED,
+      `selector ${JSON.stringify(params.selector)} matched no element in tab ${params.tabId}`,
+    );
+  }
+  if (got.disabled) {
+    // Matched, but the control is disabled: a click would be a silent no-op, so refuse honestly
+    // rather than report a false success (same philosophy as set_input refusing a checkbox write).
+    return fail(ERR_PRECONDITION_FAILED, `element is disabled in tab ${params.tabId}`);
+  }
+  if (got.ok !== true) {
+    // No positive success flag: an empty frame (destroyed/re-injected mid-click) or a body that
+    // threw leaves `got={}`, which must NOT be reported as a success.
+    return fail(ERR_INTERNAL, "click got no result from the injected frame");
+  }
+  return ok({});
 }
 
 // wait_for {tabId, urlMatches?|selector?|textContains?, timeoutMs} ->
@@ -2303,17 +2416,18 @@ const debuggerAttachedTabs = new Set();
 // overflow (surfaced to the agent, never a silent loss); `bytes` is the running weight of the
 // buffered text payloads, kept incrementally so the byte cap does not rescan on every frame.
 //
-// OWNERSHIP INVARIANT (§12): `debuggerAttachedTabs`, `wsCaptureTabs` and `screenshotTabs` are each
-// the ownership marker of ONE feature — focus emulation, ws capture and (transient) screenshot
-// respectively — and a tab lives in AT MOST ONE of the three at a time (one debugger client per
-// tab). They are therefore MUTUALLY EXCLUSIVE in EVERY direction: each start verb refuses with
-// `debugger_attach` when ANY OTHER set already holds the tab (each feature checks the two sets it
-// does NOT own), and each feature only ever attaches/detaches a tab of its OWN set — so none can
-// pull the debugger out from under another. `screenshotTabs` is TRANSIENT: screenshot attaches,
-// captures and detaches within one call (it never HOLDS the debugger the way focus emulation does),
-// but for that window the tab is its own, so a concurrent focus/ws verb must refuse rather than tear
-// the in-flight shot's session down. The cross-feature cleanup in `handleDebuggerDetach` and
-// `__resetDebuggerState` is the sole exception: a real detach event / a test reset clear ALL THREE
+// OWNERSHIP INVARIANT (§12): `debuggerAttachedTabs`, `wsCaptureTabs`, `screenshotTabs` and
+// `evalDebuggerTabs` are each the ownership marker of ONE feature — focus emulation, ws capture,
+// (transient) screenshot and (transient) execute_js_debugger respectively — and a tab lives in AT
+// MOST ONE of the FOUR at a time (one debugger client per tab). They are therefore MUTUALLY
+// EXCLUSIVE in EVERY direction: each start verb refuses with `debugger_attach` when ANY OTHER set
+// already holds the tab (each feature checks the three sets it does NOT own), and each feature only
+// ever attaches/detaches a tab of its OWN set — so none can pull the debugger out from under
+// another. `screenshotTabs` and `evalDebuggerTabs` are TRANSIENT: their verb attaches, runs ONE
+// command and detaches within a single call (neither HOLDS the debugger the way focus emulation
+// does), but for that window the tab is its own, so a concurrent focus/ws verb must refuse rather
+// than tear the in-flight session down. The cross-feature cleanup in `handleDebuggerDetach` and
+// `__resetDebuggerState` is the sole exception: a real detach event / a test reset clear ALL FOUR
 // sets, because they cannot know which feature owned the tab.
 //
 // Deliberately in-memory and lost on MV3 SW death (the debugger detaches implicitly then, too):
@@ -2328,6 +2442,14 @@ const wsCaptureTabs = new Map();
 // attaching a second client onto it or (worse) detaching it mid-capture. Its OWN set, per the
 // invariant above; cleared alongside the other two on a real detach / test reset.
 const screenshotTabs = new Set();
+
+// Transient ownership marker for an in-flight execute_js_debugger on a tab (§6). Like screenshot,
+// execute_js_debugger attaches the debugger, runs ONE `Runtime.evaluate` and detaches within a
+// single call — it never holds the session — but while that call is in flight the tab is
+// exclusively its own, so a concurrent set_focus_emulation / start_ws_capture / screenshot sees it
+// HERE and refuses `debugger_attach` instead of attaching a second client. Its OWN set, per the
+// invariant above; cleared alongside the other three on a real detach / test reset.
+const evalDebuggerTabs = new Set();
 
 // Ring-buffer ceilings for a single tab's capture. On overflow the OLDEST frame is evicted and
 // `dropped` is incremented — no silent truncation. WS_MAX_BUFFER_BYTES caps the summed weight
@@ -2387,6 +2509,9 @@ export function handleDebuggerDetach(source) {
     // this tab can no longer detach it in its own finally — clear the marker so the invariant
     // (a tab lives in AT MOST ONE set) holds and a later feature is not refused by a stale entry.
     screenshotTabs.delete(source.tabId);
+    // Likewise drop any in-flight execute_js_debugger marker (§6): same transient reasoning as the
+    // screenshot marker above — the debugger is gone, so its finally can no longer detach the tab.
+    evalDebuggerTabs.delete(source.tabId);
   }
 }
 
@@ -2431,6 +2556,7 @@ export function __resetDebuggerState() {
   debuggerAttachedTabs.clear();
   wsCaptureTabs.clear();
   screenshotTabs.clear();
+  evalDebuggerTabs.clear();
 }
 
 // set_focus_emulation {tabId, enabled} (§12, wave 18). Makes a BACKGROUND tab behave as
@@ -2475,15 +2601,17 @@ async function setFocusEmulation(params) {
     const discarded = discardedFail(tab, tabId);
     if (discarded) return discarded;
     // MUTUAL EXCLUSION (§12), symmetric to how `startWsCapture` refuses a tab held by focus
-    // emulation: if a ws capture OR an in-flight screenshot already owns this tab, refuse UP FRONT
-    // with `debugger_attach` rather than attaching a second debugger client — which would throw —
-    // or, worse, letting a later `enabled=false` detach that session out from under itself. Those
-    // tabs live ONLY in `wsCaptureTabs` / `screenshotTabs`, never in `debuggerAttachedTabs`, so this
-    // check is the only thing that keeps focus emulation off them.
-    if (wsCaptureTabs.has(tabId) || screenshotTabs.has(tabId)) {
+    // emulation: if a ws capture, an in-flight screenshot OR an in-flight execute_js_debugger already
+    // owns this tab, refuse UP FRONT with `debugger_attach` rather than attaching a second debugger
+    // client — which would throw — or, worse, letting a later `enabled=false` detach that session out
+    // from under itself. Those tabs live ONLY in `wsCaptureTabs` / `screenshotTabs` /
+    // `evalDebuggerTabs`, never in `debuggerAttachedTabs`, so this check is the only thing that keeps
+    // focus emulation off them.
+    if (wsCaptureTabs.has(tabId) || screenshotTabs.has(tabId) || evalDebuggerTabs.has(tabId)) {
       return fail(
         ERR_DEBUGGER_ATTACH,
-        "tab is held by an active ws capture or screenshot — let it finish or stop it first",
+        "tab is held by an active ws capture, screenshot or execute_js_debugger — " +
+          "let it finish or stop it first",
       );
     }
     // Track whether THIS call is the one that attached the tab, so the sendCommand catch
@@ -2601,13 +2729,20 @@ async function startWsCapture(params) {
     return fail(ERR_PRECONDITION_FAILED, "start_ws_capture target is not an http/https tab");
   }
   // One debugger client per tab. If focus emulation already holds this tab, a capture is already
-  // running on it, or a screenshot is mid-capture, refuse up front rather than letting
-  // `chrome.debugger.attach` throw "Another debugger is already attached". Deliberately NOT
-  // ref-counted — a single client per tab is the acknowledged limit of this slice.
-  if (debuggerAttachedTabs.has(tabId) || wsCaptureTabs.has(tabId) || screenshotTabs.has(tabId)) {
+  // running on it, a screenshot is mid-capture, or an execute_js_debugger evaluation is in flight,
+  // refuse up front rather than letting `chrome.debugger.attach` throw "Another debugger is already
+  // attached". Deliberately NOT ref-counted — a single client per tab is the acknowledged limit of
+  // this slice.
+  if (
+    debuggerAttachedTabs.has(tabId) ||
+    wsCaptureTabs.has(tabId) ||
+    screenshotTabs.has(tabId) ||
+    evalDebuggerTabs.has(tabId)
+  ) {
     return fail(
       ERR_DEBUGGER_ATTACH,
-      "debugger already attached to this tab (focus emulation, ws capture or screenshot)",
+      "debugger already attached to this tab " +
+        "(focus emulation, ws capture, screenshot or execute_js_debugger)",
     );
   }
   try {
@@ -2921,13 +3056,20 @@ async function screenshotDebugger(tabId, format, quality, rect) {
       "a background-tab screenshot needs the JS & Debugger checkbox enabled in this copy's options",
     );
   }
-  // One debugger client per tab: if focus emulation, a ws capture or ANOTHER in-flight screenshot
-  // already holds this tab, refuse up front rather than letting attach throw — the same mutual
-  // exclusion start_ws_capture uses, now checking ALL THREE ownership sets.
-  if (debuggerAttachedTabs.has(tabId) || wsCaptureTabs.has(tabId) || screenshotTabs.has(tabId)) {
+  // One debugger client per tab: if focus emulation, a ws capture, ANOTHER in-flight screenshot or
+  // an in-flight execute_js_debugger already holds this tab, refuse up front rather than letting
+  // attach throw — the same mutual exclusion start_ws_capture uses, now checking ALL FOUR ownership
+  // sets.
+  if (
+    debuggerAttachedTabs.has(tabId) ||
+    wsCaptureTabs.has(tabId) ||
+    screenshotTabs.has(tabId) ||
+    evalDebuggerTabs.has(tabId)
+  ) {
     return fail(
       ERR_DEBUGGER_ATTACH,
-      "debugger already attached to this tab (focus emulation, ws capture or screenshot)",
+      "debugger already attached to this tab " +
+        "(focus emulation, ws capture, screenshot or execute_js_debugger)",
     );
   }
   try {
@@ -2968,6 +3110,136 @@ async function screenshotDebugger(tabId, format, quality, rect) {
       // Already gone (tab closed, DevTools took it): drop our marker regardless.
     }
     screenshotTabs.delete(tabId);
+  }
+}
+
+// execute_js_debugger {tabId, code} — the CSP-bypass twin of execute_js (§12). Where execute_js
+// runs the code with `chrome.scripting.executeScript` (indirect eval in the page's MAIN world,
+// which the page's CSP `script-src` `'unsafe-eval'` can forbid), this runs it through a TRANSIENT
+// chrome.debugger attach -> Runtime.evaluate -> detach — the DevTools-console path, which is NOT
+// subject to the page CSP. Lifecycle mirrors screenshotDebugger (attach, one command, detach in a
+// finally) — the session is NEVER held. Runs in the page's default (MAIN) execution context only;
+// there is no `world` choice on this verb. Gated by the SAME JS & Debugger checkbox and audited
+// the SAME way (§12) as execute_js.
+async function executeJsDebugger(params) {
+  const stored = await chrome.storage.local.get(ALLOW_EXECUTE_JS_KEY);
+  const allowed = !!(stored && stored[ALLOW_EXECUTE_JS_KEY]);
+  if (!allowed) {
+    return fail(ERR_JS_DISABLED, "execute_js_debugger is disabled in this copy's options");
+  }
+  const tabId = params.tabId;
+  // Existence first (a thrown tabs.get is no_such_tab), then the discarded check (issue #68 — the
+  // debugger cannot attach to an unloaded tab), then the http/https edge guard — the same order and
+  // the same edge invariants execute_js and every other debugger verb enforce (§12).
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return fail(ERR_NO_SUCH_TAB, `no such tab: ${tabId}`);
+  }
+  const discarded = discardedFail(tab, tabId);
+  if (discarded) return discarded;
+  if (!isHttpUrl(tab.url)) {
+    return fail(ERR_PRECONDITION_FAILED, "execute_js_debugger target is not an http/https tab");
+  }
+  // One debugger client per tab: refuse up front if focus emulation, a ws capture, a screenshot or
+  // ANOTHER in-flight execute_js_debugger already holds this tab — the same mutual exclusion the
+  // other debugger verbs use, checking ALL FOUR ownership sets.
+  if (
+    debuggerAttachedTabs.has(tabId) ||
+    wsCaptureTabs.has(tabId) ||
+    screenshotTabs.has(tabId) ||
+    evalDebuggerTabs.has(tabId)
+  ) {
+    return fail(
+      ERR_DEBUGGER_ATTACH,
+      "debugger already attached to this tab " +
+        "(focus emulation, ws capture, screenshot or execute_js_debugger)",
+    );
+  }
+  try {
+    await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
+  } catch {
+    return fail(
+      ERR_DEBUGGER_ATTACH,
+      "could not attach debugger — DevTools open on this tab, or another client attached",
+    );
+  }
+  // TRANSIENT ownership marker: hold the tab in `evalDebuggerTabs` — this verb's OWN set — only for
+  // the duration of the evaluation so a concurrent focus/ws/screenshot verb refuses, then release
+  // it in the finally.
+  evalDebuggerTabs.add(tabId);
+  try {
+    // Runtime.evaluate params (CDP 1.3, per the DevTools-protocol EvaluateRequest reference — each is
+    // an independent optional field):
+    //   returnByValue:true  — hand back the value structured-cloned, not a RemoteObject handle.
+    //   awaitPromise:true   — if the expression evaluates to a promise, resolve it and return the
+    //                         settled value (top-level await / a returned promise just works).
+    //   userGesture:true    — evaluate as if triggered by a user gesture (gesture-gated APIs work),
+    //                         matching how the DevTools console runs a typed expression.
+    //   replMode:true       — REPL semantics: the last statement's completion value is returned and
+    //                         top-level `let`/`const`/`await` parse, exactly like the console. A bare
+    //                         top-level `return` is a SyntaxError (as in the console) — use an
+    //                         expression, not `return`.
+    //   timeout             — deadline in ms: without it a non-terminating snippet (an infinite loop,
+    //                         or an unresolved promise under awaitPromise) would hang sendCommand
+    //                         forever, the finally would never run, and the debugger would stay
+    //                         attached — permanently wedging the tab against every debugger verb. V8
+    //                         TERMINATES at the deadline and returns exceptionDetails instead, so the
+    //                         finally always detaches. The service ALWAYS sends a concrete positive
+    //                         deadline (the caller's clamped timeout_ms, or CMD_TIMEOUT_MS by
+    //                         default); the present-and-positive guard is a safety net for a direct
+    //                         call that omits it.
+    const evalParams = {
+      expression: String(params.code == null ? "" : params.code),
+      returnByValue: true,
+      awaitPromise: true,
+      userGesture: true,
+      replMode: true,
+    };
+    const evalTimeoutMs = Number(params.timeoutMs);
+    if (Number.isFinite(evalTimeoutMs) && evalTimeoutMs > 0) {
+      evalParams.timeout = evalTimeoutMs;
+    }
+    const res = await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", evalParams);
+    if (res && res.exceptionDetails) {
+      // The code THREW (or rejected): surface it as a page precondition, not debugger_attach — the
+      // attach was fine. Prefer the thrown value's description, fall back to the CDP text.
+      const ex = res.exceptionDetails;
+      const desc =
+        (ex.exception && ex.exception.description) || ex.text || "error";
+      return fail(ERR_PRECONDITION_FAILED, `evaluation threw: ${desc}`);
+    }
+    const remote = (res && res.result) || {};
+    // returnByValue puts the cloned value under `value` when the result is serializable. Use
+    // hasOwnProperty so a genuine `null`/`undefined` value is returned as-is and not mistaken for
+    // a non-serializable result.
+    if (Object.prototype.hasOwnProperty.call(remote, "value")) {
+      return ok({ value: remote.value });
+    }
+    // Non-serializable result (a DOM node, a function, a Window …): returnByValue leaves `value`
+    // unset and describes the handle instead. Mirror execute_js's `{__unserializable, preview}`
+    // shape so the agent sees a named diagnostic rather than a silent null.
+    return ok({
+      value: {
+        __unserializable: remote.className || remote.subtype || remote.type,
+        preview: remote.description || "",
+      },
+    });
+  } catch (e) {
+    // The attach succeeded but the sendCommand failed (tab crashed / navigated away, CDP-level
+    // error). Report a page precondition, not debugger_attach — the attach was fine.
+    return fail(
+      ERR_PRECONDITION_FAILED,
+      `could not evaluate: ${String((e && e.message) || e)}`,
+    );
+  } finally {
+    try {
+      await chrome.debugger.detach({ tabId });
+    } catch {
+      // Already gone (tab closed, DevTools took it): drop our marker regardless.
+    }
+    evalDebuggerTabs.delete(tabId);
   }
 }
 

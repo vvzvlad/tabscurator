@@ -51,6 +51,10 @@ CMD_FOCUS_WINDOW = "focus_window"
 CMD_NAVIGATE_TAB = "navigate_tab"
 CMD_MERGE_WINDOWS = "merge_windows"
 CMD_EXECUTE_JS = "execute_js"
+# CDP twin of execute_js: the extension runs the code through a TRANSIENT chrome.debugger
+# attach -> Runtime.evaluate -> detach (the DevTools-console path), which bypasses the page's
+# CSP `script-src` `'unsafe-eval'`. Same checkbox gate and same §12 audit as execute_js.
+CMD_EXECUTE_JS_DEBUGGER = "execute_js_debugger"
 # Move ONE tab to a window/position inside a SINGLE browser. Relocation BETWEEN
 # instances is the open+close pair of §7, which works only because the browsers are
 # separate processes; between the windows of one browser there was no verb at all.
@@ -75,6 +79,13 @@ CMD_WAIT_FOR = "wait_for"
 # browser, the read-only fixed ones (``get_text`` / ``wait_for``) included; the mutation is what
 # sets set_input apart from those, not the gate.
 CMD_SET_INPUT = "set_input"
+# Fixed-function click twin of set_input: ``selector`` is DATA fed to ``querySelector`` (never
+# source spliced into a page eval), so it is NOT behind the execute_js checkbox and writes NO
+# ``js_audit`` row. It IS a MUTATION (it clicks the page as the user), so the service side gates
+# it behind the pause/stop switch, exactly like set_input; the extension applies the same
+# http/https edge guard on the target tab. Works on CSP-locked pages because the click is a
+# chrome.scripting injection, which bypasses the page's ``script-src`` — the whole reason it exists.
+CMD_CLICK = "click"
 # Scroll a tab until the element count for a selector stops growing (or a target / deadline
 # is hit). FIXED-function like ``get_text`` / ``wait_for``: its parameters are selectors and
 # a direction — DATA fed to ``querySelector`` / ``scrollTop``, never source spliced into a
