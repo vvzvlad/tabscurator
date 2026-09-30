@@ -178,6 +178,13 @@ export const CMD_WAIT_FOR = "wait_for";
 // like navigate_tab — as it gates every verb that reaches the browser, the read-only fixed ones
 // (get_text/wait_for) included; the mutation is what sets set_input apart from those, not the gate.
 export const CMD_SET_INPUT = "set_input";
+// Fixed-function click twin of set_input: `selector` is DATA fed to querySelector (never source
+// spliced into a page eval), so it carries NO execute_js checkbox and writes NO js_audit row. It
+// IS a MUTATION (it clicks the page as the user), so the SERVICE side gates it behind the
+// pause/stop switch, exactly like set_input; the extension applies the same http/https edge guard.
+// Works on CSP-locked pages (accounts.spotify.com forbids eval) because the click is a
+// chrome.scripting injection, which is not subject to the page's `script-src` — its whole reason.
+export const CMD_CLICK = "click";
 // Scroll a tab until the element count for a selector stops growing (or a target /
 // deadline is hit). FIXED-function like get_text/wait_for: its parameters are selectors
 // and a direction — DATA fed to querySelector/scrollTop, never source spliced into a

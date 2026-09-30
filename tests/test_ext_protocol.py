@@ -228,6 +228,8 @@ def test_command_verbs_mirror_the_extension_exactly():
         "screenshot",
         # execute_js_debugger: CSP-bypass twin of execute_js — chrome.debugger Runtime.evaluate.
         "execute_js_debugger",
+        # click: fixed-function click twin of set_input — selector is DATA, pause-gated, no audit.
+        "click",
     }
 
 

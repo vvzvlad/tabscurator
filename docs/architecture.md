@@ -1179,6 +1179,7 @@ worker умирает через 30 с и внутренний таймер не
 | `execute_js_debugger` | `{tabId, code, world:"cdp", awaitPromise:true}` — `world`/`awaitPromise` не выбираются на MCP-поверхности, всегда эти значения (для честного аудита) | `{value}` / `js_disabled` / `precondition_failed` / `debugger_attach` — CSP-двойник `execute_js` через `chrome.debugger` `Runtime.evaluate` (§12) |
 | `get_text` | `{tabId, selector?, maxBytes?}` | `{text, truncated?, totalBytes?}` / `precondition_failed` |
 | `set_input` | `{tabId, selector, value}` | `{kind}`, `kind∈{input,contenteditable}` / `precondition_failed` |
+| `click` | `{tabId, selector}` | `{ok}` / `precondition_failed` — фикс-функция клика, двойник `set_input` (§12) |
 | `wait_for` | `{tabId, urlMatches?\|selector?\|textContains?, timeoutMs}` | `{matched, elapsedMs}` — `matched:false` при истечении срока |
 | `scroll_until` | `{tabId, countSelector, containerSelector?, direction?, targetCount?, stableRounds?, intervalMs?, timeoutMs, focus?}` | `{count, rounds, stopped, elapsedMs}`, `stopped∈{stable,target,deadline}` |
 | `start_js` | `{tabId, code, world?, jobId, awaitPromise}` — `awaitPromise` всегда `true` (джоба всегда исполняется как awaited async-тело) | `{jobId}` / `js_disabled` |
@@ -1253,6 +1254,17 @@ no-op. **Фиксированное действие** (reload, не произ�
 ОТБРОСИТЬ — это базовое покрытие обычных `contenteditable`/textbox-композеров, не их.
 Селектор, не нашедший элемента, не разобравшийся или указавший на не-редактируемый элемент,
 — `precondition_failed`.
+
+**`click` — фиксированный, но МУТАЦИЯ (двойник `set_input`).** Жмёт элемент по селектору
+одним вызовом: `selector` — **данные** для `querySelector`, исходником в eval не становится,
+поэтому галочки `execute_js` не требует и строку `js_audit` не пишет; но это **запись**, потому
+на сервисе — **под стоп-гейтом** (`_ensure_not_paused`), ровно как `set_input`. Тело
+`clickInWorld` диспатчит pointerdown/mousedown, pointerup/mouseup и **последним** зовёт нативный
+`.click()` (реальное действие по умолчанию — переход по ссылке, submit формы), так что
+SPA/React-кнопки реагируют. Работает на страницах с CSP, запрещающим `eval`
+(accounts.spotify.com), потому что инъекция `chrome.scripting` не подчинена `script-src` страницы.
+**Отключённый** контрол — `precondition_failed` (клик по нему — молчаливый no-op, честнее
+отказать); селектор, не нашедший элемента или не разобравшийся, — тоже `precondition_failed`.
 
 **`set_focus_emulation` — первый верб через `chrome.debugger` (§12).** Переключает
 `Emulation.setFocusEmulationEnabled`: фоновая вкладка ведёт себя как в фокусе (без

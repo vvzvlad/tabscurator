@@ -36,6 +36,7 @@ import {
   CMD_MOVE_TAB,
   CMD_GET_TEXT,
   CMD_SET_INPUT,
+  CMD_CLICK,
   CMD_WAIT_FOR,
   CMD_SCROLL_UNTIL,
   CMD_START_JS,
@@ -349,6 +350,59 @@ export function setInputInWorld(selector, value) {
   return { notEditable: true };
 }
 
+// The body injected by click. FIXED like setInputInWorld (§12): `selector` is DATA handed to
+// querySelector, nothing is spliced into an eval, so this verb needs no execute_js checkbox and
+// writes no js_audit row. It is still a MUTATION, which the SERVICE side gates behind the pause
+// switch (see click in tools.py); the extension applies the usual session + http/https edge guards.
+// It exists so a button can be pressed on a CSP-locked page (accounts.spotify.com forbids eval):
+// a chrome.scripting injection is not subject to the page's `script-src`, exactly like set_input.
+//
+// The activation sequence dispatches pointerdown/mousedown, then pointerup/mouseup, then calls the
+// element's NATIVE `.click()` LAST. The dispatched mouse/pointer events are what React and
+// Pointer-Events components listen for (a plain `.click()` alone often does not drive them), while
+// the native `.click()` is what fires the real DEFAULT ACTION — link navigation, form submit — that
+// a synthetic MouseEvent("click") does not. `.click()` runs last so the default action follows the
+// handlers the earlier events already triggered.
+//
+// A DISABLED control is REFUSED, not clicked: a disabled button swallows the click as a silent
+// no-op, so reporting success would be a lie — the same philosophy as set_input refusing a `value`
+// write to a checkbox. Returns a VALUE for every outcome (never a throw, same reason as
+// setInputInWorld — a throw is indistinguishable from a torn-down frame): `{badSelector, message}`
+// for a selector that does not parse, `{found:false}` for one that matches nothing, `{disabled:true}`
+// for a disabled control, and `{ok:true}` on success.
+export function clickInWorld(selector) {
+  let el;
+  try {
+    el = document.querySelector(selector);
+  } catch (e) {
+    // A malformed selector is the CALLER's typo, carried back as a value so the dispatcher can map
+    // it to precondition_failed rather than let it escape as `internal`.
+    if (e && e.name === "SyntaxError") {
+      return { badSelector: true, message: String((e && e.message) || e) };
+    }
+    throw e;
+  }
+  if (!el) return { found: false };
+  // A disabled control ignores a click. Refuse honestly instead of reporting a no-op as success.
+  if (el.disabled === true) return { disabled: true };
+  const down = { view: window, bubbles: true, cancelable: true, button: 0, buttons: 1 };
+  const up = { view: window, bubbles: true, cancelable: true, button: 0, buttons: 0 };
+  if (typeof PointerEvent === "function") {
+    el.dispatchEvent(new PointerEvent("pointerdown", { ...down, isPrimary: true, pointerType: "mouse" }));
+  }
+  el.dispatchEvent(new MouseEvent("mousedown", down));
+  if (typeof el.focus === "function") el.focus();
+  if (typeof PointerEvent === "function") {
+    el.dispatchEvent(new PointerEvent("pointerup", { ...up, isPrimary: true, pointerType: "mouse" }));
+  }
+  el.dispatchEvent(new MouseEvent("mouseup", up));
+  // Native .click() LAST — it fires the real default action (nav / submit) after the handlers the
+  // dispatched events already ran. Fall back to a synthetic click only if .click() is unavailable.
+  if (typeof el.click === "function") el.click();
+  else el.dispatchEvent(new MouseEvent("click", up));
+  return { ok: true };
+}
+
 // The body injected by wait_for's `selector` / `textContains` predicates, and by
 // navigate_tab's `waitUntil:'selector'`. Returns `{matched}` — or `{badSelector, message}`
 // for a selector that does not parse, which the caller must NOT mistake for "not yet".
@@ -623,6 +677,9 @@ export async function dispatchCommand(frame, ctx = {}) {
       // js_audit row — but it is a MUTATION, gated by the service-side pause switch.
       case CMD_SET_INPUT:
         return await setInput(params);
+      // click is a fixed-function MUTATION too: no checkbox/audit, pause-gated service-side.
+      case CMD_CLICK:
+        return await click(params);
       case CMD_WAIT_FOR:
         return await waitFor(params, nowFn, sleep);
       // scroll_until and poll_job are FIXED-function verbs too (§12): selectors/direction
@@ -1412,6 +1469,56 @@ async function setInput(params) {
     return fail(ERR_INTERNAL, "set_input got no result from the injected frame");
   }
   return ok({ kind: got.kind });
+}
+
+// click {tabId, selector} -> {} (ok).
+//
+// A FIXED injected function (clickInWorld), so — like set_input — NO execute_js checkbox and NO
+// js_audit row: the selector is DATA, not source. The http/https edge guard IS applied, exactly as
+// set_input/execute_js apply it. The MUTATION gate (pause/stop) lives on the SERVICE side (see click
+// in tools.py), which refuses before the frame is ever sent. It exists to press buttons on CSP-locked
+// pages (accounts.spotify.com forbids eval): a chrome.scripting injection bypasses the page's CSP.
+async function click(params) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(params.tabId);
+  } catch {
+    return fail(ERR_NO_SUCH_TAB, `no such tab: ${params.tabId}`);
+  }
+  const discarded = discardedFail(tab, params.tabId);
+  if (discarded) return discarded;
+  if (!isHttpUrl(tab.url)) {
+    return fail(ERR_PRECONDITION_FAILED, "click target is not an http/https tab");
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: params.tabId },
+    func: clickInWorld,
+    args: [params.selector],
+  });
+  const got = ((results || [])[0] || {}).result || {};
+  if (got.badSelector) {
+    return fail(
+      ERR_PRECONDITION_FAILED,
+      `invalid CSS selector ${JSON.stringify(params.selector)}: ${got.message}`,
+    );
+  }
+  if (got.found === false) {
+    return fail(
+      ERR_PRECONDITION_FAILED,
+      `selector ${JSON.stringify(params.selector)} matched no element in tab ${params.tabId}`,
+    );
+  }
+  if (got.disabled) {
+    // Matched, but the control is disabled: a click would be a silent no-op, so refuse honestly
+    // rather than report a false success (same philosophy as set_input refusing a checkbox write).
+    return fail(ERR_PRECONDITION_FAILED, `element is disabled in tab ${params.tabId}`);
+  }
+  if (got.ok !== true) {
+    // No positive success flag: an empty frame (destroyed/re-injected mid-click) or a body that
+    // threw leaves `got={}`, which must NOT be reported as a success.
+    return fail(ERR_INTERNAL, "click got no result from the injected frame");
+  }
+  return ok({});
 }
 
 // wait_for {tabId, urlMatches?|selector?|textContains?, timeoutMs} ->

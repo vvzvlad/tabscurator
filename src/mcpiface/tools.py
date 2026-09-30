@@ -1180,6 +1180,38 @@ async def set_input(app, *, instance: str, tab_id: int, selector: str, value: st
     return {"ok": True, "kind": result.get("kind")}
 
 
+async def click(app, *, instance: str, tab_id: int, selector: str,
+                auth_ctx: str | None = None, expected_session: str | None = None) -> dict:
+    """Click an element by selector in ONE call; answer ``{ok}``.
+
+    FIXED-function like :func:`set_input`: ``selector`` is DATA handed to ``querySelector``, never
+    source spliced into a page eval, so this verb is NOT behind the execute_js checkbox and writes
+    NO ``js_audit`` row.
+
+    It is nonetheless a MUTATION — the click lands AS IF the user pressed the element — so it is
+    gated by the stop switch here (:func:`_ensure_not_paused`), like EVERY verb that reaches the
+    browser; what sets ``click`` apart from the reading fixed verbs (``get_text`` / ``wait_for``) is
+    not the stop gate (all sit behind it) but that it is a WRITE. Every other gate still applies:
+    revoke, ``stale_session``, and the extension's http/https edge guard.
+
+    It exists to press buttons on CSP-locked pages (e.g. accounts.spotify.com forbids ``eval``):
+    because the click is a ``chrome.scripting`` injection it bypasses the page's ``script-src``,
+    exactly like set_input — where ``execute_js`` cannot reach.
+
+    The extension dispatches a ROBUST event sequence — pointerdown/mousedown, pointerup/mouseup,
+    then the element's native ``.click()`` LAST — so SPA / React and Pointer-Events buttons react
+    (they listen for the dispatched mouse/pointer events) AND the real default action (link
+    navigation, form submit) fires (native ``.click()``). HONEST LIMITS: a ``selector`` that does
+    not parse or matches nothing is ``precondition_failed``, and a DISABLED element is
+    ``precondition_failed`` too (a disabled control swallows the click as a silent no-op, so
+    reporting success would be a lie)."""
+    await _ensure_not_paused(app)
+    params: dict = {"tabId": tab_id, "selector": selector}
+    await _command(app, instance, protocol.CMD_CLICK, params, auth_ctx=auth_ctx,
+                   expected_session=expected_session)
+    return {"ok": True}
+
+
 async def wait_for(app, *, instance: str, tab_id: int, url_matches: str | None = None,
                    selector: str | None = None, text_contains: str | None = None,
                    timeout_ms: int | None = None, auth_ctx: str | None = None,

@@ -2768,6 +2768,38 @@ async def test_set_input_is_refused_while_paused_and_sends_nothing(tmp_path):
     assert ws.sent == []
 
 
+# --- click: the FIXED-but-MUTATING click (§12) -------------------------------
+async def test_click_sends_selector_as_click_and_returns_ok(tmp_path):
+    """FIXED body like set_input (no js_audit row), but a MUTATION. selector rides as DATA and
+    the tool answers a bare `{ok}` — there is no `kind`/`value` here, unlike set_input."""
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    out, frame = await _run_with_response(
+        lambda: tools.click(_app(db, reg), instance="main", tab_id=2, selector="#save"),
+        cs, ws, {},
+    )
+    assert out == {"ok": True}
+    assert frame["command"] == protocol.CMD_CLICK
+    assert frame["params"] == {"tabId": 2, "selector": "#save"}
+    # No arbitrary code ran, so there is nothing to audit — the same §12 line as set_input.
+    assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM js_audit").fetchone()) == (0,)
+
+
+async def test_click_is_refused_while_paused_and_sends_nothing(tmp_path):
+    # A MUTATION: gated by the stop switch exactly like set_input/navigate_tab. The refusal must
+    # land BEFORE the frame reaches the socket.
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    _cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    await tools.pause(app)
+    with pytest.raises(tools.ToolError) as ei:
+        await tools.click(app, instance="main", tab_id=2, selector="#a")
+    assert ei.value.code == "stopped"
+    assert ws.sent == []
+
+
 # --- wait_for ----------------------------------------------------------------
 async def test_wait_for_requires_exactly_one_predicate_and_sends_nothing(tmp_path):
     db = await _make_db(tmp_path)

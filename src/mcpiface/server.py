@@ -513,6 +513,32 @@ def build_mcp(app_ref) -> MCPServer:
         ))
 
     @mcp.tool()
+    async def click(instance: str, tab_id: int, selector: str,
+                    expected_session: str | None = None) -> dict:
+        """Click an element by selector in ONE call; answers ``{ok}``.
+
+        A FIXED injected function, so — unlike execute_js — it needs NO execute_js checkbox
+        and writes no js_audit row (``selector`` is DATA, not source). But it is a MUTATION —
+        the click lands as if the user pressed the element — so it IS gated by the pause/stop
+        switch, like the other mutating verbs; the http/https target guard applies too.
+
+        It exists to press buttons on CSP-locked pages (e.g. accounts.spotify.com forbids
+        ``eval``): because the click is a chrome.scripting injection it bypasses the page's CSP,
+        exactly like set_input — where execute_js cannot reach.
+
+        The extension dispatches a ROBUST event sequence — pointerdown/mousedown, pointerup/
+        mouseup, then the element's native ``.click()`` LAST — so SPA / React and Pointer-Events
+        buttons react (they listen for the dispatched mouse/pointer events) AND the real default
+        action (link navigation, form submit) fires (native ``.click()``). HONEST LIMITS: a
+        ``selector`` matching nothing or not parsing is ``precondition_failed``, and a DISABLED
+        element is ``precondition_failed`` too (a disabled control swallows the click as a silent
+        no-op, so reporting success would be a lie)."""
+        return await _guarded(tools.click(
+            _host(), instance=instance, tab_id=tab_id, selector=selector,
+            auth_ctx=current_mcp_session(), expected_session=expected_session,
+        ))
+
+    @mcp.tool()
     async def wait_for(instance: str, tab_id: int, url_matches: str | None = None,
                        selector: str | None = None, text_contains: str | None = None,
                        timeout_ms: int | None = None,

@@ -5,6 +5,7 @@ import {
   evalInWorld,
   readTextInWorld,
   setInputInWorld,
+  clickInWorld,
   matchInWorld,
   rectInWorld,
   scrollAndCountInWorld,
@@ -28,6 +29,7 @@ import {
   CMD_MOVE_TAB,
   CMD_GET_TEXT,
   CMD_SET_INPUT,
+  CMD_CLICK,
   CMD_WAIT_FOR,
   CMD_SCROLL_UNTIL,
   CMD_START_JS,
@@ -2390,6 +2392,213 @@ describe("set_input", () => {
   });
 });
 
+// --- click: the FIXED-but-MUTATING click (§12) -------------------------------
+// A DOM environment for clickInWorld. The injected body constructs MouseEvent / PointerEvent (for
+// the dispatched activation events) and reads `window` (the events' `view`), none of which the node
+// test runtime provides — so the harness installs doubles and restores them afterwards. The element
+// double records every dispatched event's type AND the native `.click()` into one `env.events` array
+// (in order), so a test can PROVE the native click fires LAST, after the dispatched mouse/pointer
+// events. `env.clickSpy` / `env.focusSpy` back the "was it clicked / focused" assertions.
+function withClickEnv(fn) {
+  const saved = {
+    document: globalThis.document,
+    window: globalThis.window,
+    MouseEvent: globalThis.MouseEvent,
+    PointerEvent: globalThis.PointerEvent,
+  };
+  const events = [];
+  class FakeMouseEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.bubbles = !!init.bubbles;
+      this.button = init.button;
+      this.buttons = init.buttons;
+    }
+  }
+  class FakePointerEvent extends FakeMouseEvent {
+    constructor(type, init = {}) {
+      super(type, init);
+      this.pointerType = init.pointerType;
+      this.isPrimary = init.isPrimary;
+    }
+  }
+  globalThis.window = {};
+  globalThis.MouseEvent = FakeMouseEvent;
+  globalThis.PointerEvent = FakePointerEvent;
+
+  const clickSpy = vi.fn();
+  const focusSpy = vi.fn();
+  const makeEl = (extra = {}) => ({
+    dispatchEvent(ev) {
+      events.push(ev.type);
+      return true;
+    },
+    focus() {
+      focusSpy();
+      this._focused = true;
+    },
+    click() {
+      clickSpy();
+      events.push("click"); // the NATIVE click, recorded in the same order stream as the events
+    },
+    ...extra,
+  });
+
+  const env = {
+    events,
+    clickSpy,
+    focusSpy,
+    // An ordinary clickable element (no `disabled` property → `el.disabled === true` is false).
+    button: () => makeEl(),
+    // A disabled control: the body must refuse it before dispatching anything.
+    disabled: () => makeEl({ disabled: true }),
+    setDoc(matches = {}, bad = []) {
+      globalThis.document = {
+        querySelector: (sel) => {
+          if (bad.includes(sel)) {
+            const e = new Error(`'${sel}' is not a valid selector`);
+            e.name = "SyntaxError";
+            throw e;
+          }
+          return sel in matches ? matches[sel] : null;
+        },
+      };
+    },
+  };
+  try {
+    return fn(env);
+  } finally {
+    globalThis.document = saved.document;
+    globalThis.window = saved.window;
+    globalThis.MouseEvent = saved.MouseEvent;
+    globalThis.PointerEvent = saved.PointerEvent;
+  }
+}
+
+describe("clickInWorld — click's injected body", () => {
+  it("dispatches mousedown, mouseup, then the NATIVE click LAST, and returns ok", () => {
+    withClickEnv((env) => {
+      const el = env.button();
+      env.setDoc({ "#save": el });
+      const res = clickInWorld("#save");
+      expect(res).toEqual({ ok: true });
+      expect(el._focused).toBe(true);
+      // The native .click() (the real default action — nav / submit) fires AFTER the dispatched
+      // mouse/pointer events the frameworks listen for.
+      expect(env.clickSpy).toHaveBeenCalledTimes(1);
+      expect(env.events).toEqual(["pointerdown", "mousedown", "pointerup", "mouseup", "click"]);
+      // The load-bearing ordering: mousedown BEFORE mouseup BEFORE the native click.
+      const order = env.events.filter((t) => ["mousedown", "mouseup", "click"].includes(t));
+      expect(order).toEqual(["mousedown", "mouseup", "click"]);
+    });
+  });
+
+  it("a selector that matches NOTHING is found:false, never a click", () => {
+    withClickEnv((env) => {
+      env.setDoc({});
+      expect(clickInWorld("#nope")).toEqual({ found: false });
+      expect(env.clickSpy).not.toHaveBeenCalled();
+      expect(env.events).toEqual([]);
+    });
+  });
+
+  it("a MALFORMED selector is reported as a value, never a throw", () => {
+    // A throw is indistinguishable from a torn-down frame; the typo has to travel as data so the
+    // dispatcher can map it to precondition_failed rather than let it escape as `internal`.
+    withClickEnv((env) => {
+      env.setDoc({}, ["#a:has(>"]);
+      const got = clickInWorld("#a:has(>");
+      expect(got.badSelector).toBe(true);
+      expect(got.message).toMatch(/not a valid selector/);
+    });
+  });
+
+  it("REFUSES a disabled control as disabled, never a click", () => {
+    withClickEnv((env) => {
+      env.setDoc({ "#save": env.disabled() });
+      expect(clickInWorld("#save")).toEqual({ disabled: true });
+      // A disabled button swallows a click as a silent no-op — refuse honestly, dispatch nothing.
+      expect(env.clickSpy).not.toHaveBeenCalled();
+      expect(env.events).toEqual([]);
+    });
+  });
+});
+
+describe("click", () => {
+  it("runs with the execute_js checkbox OFF — a fixed function is not eval (§12)", async () => {
+    // The verb clicks the page (a mutation, pause-gated on the service side), but its BODY is fixed
+    // and takes only DATA, so the extension edge needs no execute_js checkbox.
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { ok: true } }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a" }), ctx());
+    expect(res).toEqual({ ok: true, result: {} });
+  });
+
+  it("passes the selector to the FIXED function, never a code string", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { ok: true } }];
+    const exec = vi.spyOn(chrome.scripting, "executeScript");
+    await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#save" }), ctx());
+    const injection = exec.mock.calls[0][0];
+    expect(injection.args).toEqual(["#save"]);
+    expect(typeof injection.func).toBe("function");
+  });
+
+  it("a MALFORMED selector is precondition_failed, not `internal`", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [
+      { result: { badSelector: true, message: "'#a:has(>' is not a valid selector" } },
+    ];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a:has(>" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toContain("#a:has(>");
+  });
+
+  it("a selector that matched nothing => precondition_failed", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { found: false } }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#nope" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toContain("#nope");
+  });
+
+  it("a disabled element => precondition_failed", async () => {
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: { disabled: true } }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#save" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toMatch(/disabled/);
+  });
+
+  it("an EMPTY injected result (torn-down/re-injected frame) => internal, not a false ok", async () => {
+    // The native `.click()` can navigate (a link / a submit button), which tears the frame down
+    // mid-inject and answers with no `result` — got={}. Without the positive-flag check that would
+    // fall through to ok({}) as a silent false success; it must be `internal` instead.
+    chromeWithOneTab5();
+    chrome.__state.scriptResults = [{ result: undefined }];
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a" }), ctx());
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("internal");
+  });
+
+  it("keeps execute_js's http/https target guard (§12)", async () => {
+    chromeWithOneTab5("file:///etc/passwd");
+    const exec = vi.spyOn(chrome.scripting, "executeScript");
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 5, selector: "#a" }), ctx());
+    expect(res.error.code).toBe("precondition_failed");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("a vanished tab is no_such_tab, not internal", async () => {
+    chromeWithOneTab5();
+    const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 999, selector: "#a" }), ctx());
+    expect(res.error.code).toBe("no_such_tab");
+  });
+});
+
 // --- wait_for ----------------------------------------------------------------
 // A fake clock whose SLEEP is what advances time: the poll loop then runs to its deadline
 // instantly and deterministically, instead of spending real seconds.
@@ -4022,6 +4231,7 @@ describe("tab_discarded guard (#68)", () => {
   const fixedVerbs = [
     ["get_text", CMD_GET_TEXT, { tabId: 5 }],
     ["set_input", CMD_SET_INPUT, { tabId: 5, selector: "#a", value: "x" }],
+    ["click", CMD_CLICK, { tabId: 5, selector: "#a" }],
     ["scroll_until", CMD_SCROLL_UNTIL, { tabId: 5, countSelector: ".m", timeoutMs: 1000 }],
     ["poll_job", CMD_POLL_JOB, { tabId: 5, jobId: "job-1" }],
     ["wait_for selector", CMD_WAIT_FOR, { tabId: 5, selector: ".ready", timeoutMs: 1000 }],
