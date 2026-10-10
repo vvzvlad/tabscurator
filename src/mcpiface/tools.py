@@ -1070,11 +1070,20 @@ async def execute_js_debugger(app, *, instance: str, tab_id: int, code: str,
     # the wait verbs: V8 terminates the evaluation at ``cdp_deadline``, then the extension still needs
     # to detach and round-trip the exceptionDetails, so the caller sees the real precondition_failed
     # rather than a premature socket ``timeout``.
-    result = await _command(app, instance, protocol.CMD_EXECUTE_JS_DEBUGGER, params,
-                            auth_ctx=auth_ctx, expected_session=expected_session,
-                            cmd_timeout_ms=_wait_budget_ms(app, cdp_deadline))
+    try:
+        result = await _command(app, instance, protocol.CMD_EXECUTE_JS_DEBUGGER, params,
+                                auth_ctx=auth_ctx, expected_session=expected_session,
+                                cmd_timeout_ms=_wait_budget_ms(app, cdp_deadline))
+    except ToolError as exc:
+        # A snippet cut at the clamped deadline comes back as an error (V8's termination as
+        # precondition_failed, or a socket timeout), so the note must ride it, as in
+        # execute_js (#71).
+        note = _clamp_note(app, timeout_ms)
+        if note:
+            raise ToolError(exc.code, exc.message, {**exc.payload, **note}) from exc
+        raise
     value, meta = truncate_payload(result.get("value"), max_bytes)
-    return {"ok": True, "value": value, **meta}
+    return {"ok": True, "value": value, **meta, **_clamp_note(app, timeout_ms)}
 
 
 async def get_text(app, *, instance: str, tab_id: int, selector: str | None = None,

@@ -2895,6 +2895,8 @@ async def test_a_clamped_timeout_is_reported_and_an_honoured_one_is_not(tmp_path
     verbs = {
         "execute_js": lambda t: tools.execute_js(
             app, instance="main", tab_id=1, code="1", timeout_ms=t),
+        "execute_js_debugger": lambda t: tools.execute_js_debugger(
+            app, instance="main", tab_id=1, code="1", timeout_ms=t),
         "wait_for": lambda t: tools.wait_for(
             app, instance="main", tab_id=1, url_matches="/x", timeout_ms=t),
         "scroll_until": lambda t: tools.scroll_until(
@@ -2922,6 +2924,20 @@ async def test_a_clamped_timeout_is_reported_and_an_honoured_one_is_not(tmp_path
     with pytest.raises(tools.ToolError) as err:
         await verbs["execute_js"](4000)
     assert err.value.code == "timeout" and err.value.payload == {}
+
+    # execute_js_debugger: V8 terminating the snippet at the clamped CDP deadline comes back
+    # as precondition_failed, and the note must ride that error the same way.
+    async def _terminated(registry, db, instance_id, command, params, **kw):
+        raise CommandError(protocol.ERR_PRECONDITION_FAILED, "Execution was terminated")
+
+    monkeypatch.setattr(tools, "send_command", _terminated)
+    with pytest.raises(tools.ToolError) as err:
+        await verbs["execute_js_debugger"](999_000)
+    assert err.value.code == protocol.ERR_PRECONDITION_FAILED
+    assert err.value.payload == {"clamped": True, "timeout_ms_effective": 5000}
+    with pytest.raises(tools.ToolError) as err:
+        await verbs["execute_js_debugger"](4000)
+    assert err.value.payload == {}
 
 
 async def test_list_instances_exposes_the_timeout_ceiling(tmp_path):

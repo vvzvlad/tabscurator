@@ -430,8 +430,9 @@ def build_mcp(app_ref) -> MCPServer:
         ``{__unserializable, preview}`` instead of a silent null), capped at ``max_bytes``
         (default 40000) with ``truncated`` + ``total_bytes``. ``timeout_ms`` sets the evaluation
         deadline — a non-terminating snippet is terminated at it so it cannot leave the debugger
-        attached — clamped to EXECUTE_JS_MAX_TIMEOUT_MS and defaulting to CMD_TIMEOUT_MS. Refused
-        while paused."""
+        attached — clamped to EXECUTE_JS_MAX_TIMEOUT_MS and defaulting to CMD_TIMEOUT_MS. Over
+        the ceiling the answer (or the error) adds ``clamped: true`` + ``timeout_ms_effective``.
+        Refused while paused."""
         return await _guarded(tools.execute_js_debugger(
             _host(), instance=instance, tab_id=tab_id, code=code,
             url_at_exec=url_at_exec, timeout_ms=timeout_ms,
