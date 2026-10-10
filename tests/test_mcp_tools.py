@@ -24,7 +24,7 @@ from src.db.access import Database
 from src.db.audit import insert_js_audit  # noqa: F401  (schema presence)
 from src.db.settings_store import get_setting, set_setting
 from src.ext import protocol
-from src.ext.commands import resolve_response
+from src.ext.commands import CommandError, resolve_response
 from src.ext.registry import ConnState, Registry
 from src.mcpiface import tools
 from src.settings import EXT_WAIT_MAX_TIMEOUT_MS
@@ -63,7 +63,8 @@ def _app(db, registry=None, settings=None):
     registry = registry if registry is not None else Registry()
     settings = settings if settings is not None else _settings()
     return SimpleNamespace(
-        state=SimpleNamespace(db=db, ext_registry=registry, settings=settings)
+        state=SimpleNamespace(db=db, ext_registry=registry, settings=settings,
+                              mcp_tab_leases={})
     )
 
 
@@ -922,7 +923,8 @@ async def test_scroll_until_sends_command_and_renames_shape(tmp_path):
             container_selector="#feed", direction="up", target_count=200,
             stable_rounds=4, interval_ms=500, focus=True, auth_ctx="s",
         ),
-        cs, ws, {"count": 200, "rounds": 12, "stopped": "target", "elapsedMs": 6000},
+        cs, ws, {"count": 200, "rounds": 12, "stopped": "target", "elapsedMs": 6000,
+                 "countStart": 40, "scrolledPx": 9000, "atBottom": False},
     )
     assert frame["command"] == protocol.CMD_SCROLL_UNTIL
     p = frame["params"]
@@ -930,9 +932,10 @@ async def test_scroll_until_sends_command_and_renames_shape(tmp_path):
     assert p["direction"] == "up" and p["targetCount"] == 200
     assert p["stableRounds"] == 4 and p["intervalMs"] == 500 and p["focus"] is True
     assert isinstance(p["timeoutMs"], int) and p["timeoutMs"] > 0
-    # elapsedMs -> elapsed_ms; the rest carried through.
+    # elapsedMs -> elapsed_ms (and #74's three); the rest carried through.
     assert out == {"ok": True, "count": 200, "rounds": 12, "stopped": "target",
-                   "elapsed_ms": 6000}
+                   "elapsed_ms": 6000, "count_start": 40, "scrolled_px": 9000,
+                   "at_bottom": False}
     # A fixed verb writes NO audit row.
     assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM js_audit").fetchone()) == (0,)
 
@@ -2878,6 +2881,56 @@ async def test_wait_for_defaults_to_the_ceiling_and_clamps_to_it(tmp_path, monke
     assert seen["params"]["timeoutMs"] == 7000
 
 
+async def test_a_clamped_timeout_is_reported_and_an_honoured_one_is_not(tmp_path, monkeypatch):
+    """#71: a silent clamp made ``matched: false`` unreadable — "not within what I asked"
+    and "not within what I was given" looked the same. Over the ceiling every clamping verb
+    says so, with the value it actually used; at or under it the answer is unchanged."""
+    db = await _make_db(tmp_path)
+    app = _app(db, Registry(), _settings(cmd_timeout_ms=1000, execute_js_max_timeout_ms=5000))
+
+    async def _fake_send(registry, db, instance_id, command, params, **kw):
+        return {"matched": True, "elapsedMs": 1}
+
+    monkeypatch.setattr(tools, "send_command", _fake_send)
+    verbs = {
+        "execute_js": lambda t: tools.execute_js(
+            app, instance="main", tab_id=1, code="1", timeout_ms=t),
+        "wait_for": lambda t: tools.wait_for(
+            app, instance="main", tab_id=1, url_matches="/x", timeout_ms=t),
+        "scroll_until": lambda t: tools.scroll_until(
+            app, instance="main", tab_id=1, count_selector=".m", timeout_ms=t),
+        "navigate_tab": lambda t: tools.navigate_tab(
+            app, instance="main", tab_id=1, url="https://a/", wait_until="load", timeout_ms=t),
+    }
+    for name, call in verbs.items():
+        out = await call(999_000)
+        assert out["clamped"] is True and out["timeout_ms_effective"] == 5000, name
+        for honoured in (5000, 4000, None):
+            out = await call(honoured)
+            assert "clamped" not in out and "timeout_ms_effective" not in out, (name, honoured)
+
+    # execute_js has no page-side deadline: the clamped budget ends as a socket `timeout`,
+    # so the note must ride that error — and only when the ask was over the ceiling.
+    async def _timed_out(registry, db, instance_id, command, params, **kw):
+        raise CommandError(protocol.ERR_TIMEOUT, "command timed out")
+
+    monkeypatch.setattr(tools, "send_command", _timed_out)
+    with pytest.raises(tools.ToolError) as err:
+        await verbs["execute_js"](999_000)
+    assert err.value.code == "timeout"
+    assert err.value.payload == {"clamped": True, "timeout_ms_effective": 5000}
+    with pytest.raises(tools.ToolError) as err:
+        await verbs["execute_js"](4000)
+    assert err.value.code == "timeout" and err.value.payload == {}
+
+
+async def test_list_instances_exposes_the_timeout_ceiling(tmp_path):
+    # #71: the agent can read the ceiling BEFORE it asks for more than it will get.
+    db = await _make_db(tmp_path)
+    out = await tools.list_instances(_app(db, settings=_settings(execute_js_max_timeout_ms=7000)))
+    assert out["execute_js_max_timeout_ms"] == 7000
+
+
 async def test_wait_for_passes_the_predicate_through_and_writes_no_audit(tmp_path):
     db = await _make_db(tmp_path)
     reg = Registry()
@@ -3161,6 +3214,94 @@ async def test_open_tab_lease_writes_an_exemption_the_pass_honours(tmp_path):
     rows = await db.read(lambda c: c.execute(
         "SELECT instance_id, url, reason FROM exemptions").fetchall())
     assert rows == [("main", "https://task/", "mcp_lease")]
+
+
+async def test_navigate_tab_carries_a_live_open_tab_lease_to_the_new_url(tmp_path):
+    """#72: the pass matches a lease against the tab's LIVE url, so the agent's own
+    navigation used to drop it silently. The lease follows the tab, same deadline, and is
+    reported in ``open_tab``'s shape — with or without a wait."""
+    db = await _make_db(tmp_path)
+    await _known_instance(db)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    opened, _ = await _run_with_response(
+        lambda: tools.open_tab(app, instance="main", url="https://task/", lease_ttl_s=900),
+        cs, ws, {"tabId": 7, "windowId": 1},
+    )
+    lease_out = opened["lease"]
+    out, _ = await _run_with_response(
+        lambda: tools.navigate_tab(app, instance="main", tab_id=7, url="https://task/step2"),
+        cs, ws, {"ok": True},
+    )
+    assert out == {"ok": True, "result": {"ok": True}, "lease": lease_out}
+    out, _ = await _run_with_response(
+        lambda: tools.navigate_tab(app, instance="main", tab_id=7, url="https://task/step3",
+                                   wait_until="load", timeout_ms=1000),
+        cs, ws, {"matched": True, "elapsedMs": 5},
+    )
+    assert out["lease"] == lease_out
+    rows = await db.read(lambda c: c.execute(
+        "SELECT url, until, reason FROM exemptions ORDER BY url").fetchall())
+    assert rows == [(u, lease_out["until"], "mcp_lease")
+                    for u in ("https://task/", "https://task/step2", "https://task/step3")]
+    # A tab open_tab never leased, and a lease that has run out, carry nothing.
+    app.state.mcp_tab_leases[("main", 7)]["until"] = tools._now_ms() - 1
+    for tab_id in (8, 7):
+        out, _ = await _run_with_response(
+            lambda: tools.navigate_tab(app, instance="main", tab_id=tab_id, url="https://x/"),
+            cs, ws, {"ok": True},
+        )
+        assert out == {"ok": True, "result": {"ok": True}}
+    assert await db.read(lambda c: c.execute(
+        "SELECT COUNT(*) FROM exemptions WHERE url = 'https://x/'").fetchone()) == (0,)
+
+
+async def test_a_leased_tab_the_pass_closed_answers_tab_reaped(tmp_path):
+    """#72: ``no_such_tab`` on a tab the agent leased hid the one cause it could have
+    prevented. A curator close in the journal turns it into its own code, reported the way
+    ``tab_discarded`` is (a ToolError code); every other ``no_such_tab`` stays as it was."""
+    from src.db.actions import insert_action
+
+    db = await _make_db(tmp_path)
+    await _known_instance(db)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    await _run_with_response(
+        lambda: tools.open_tab(app, instance="main", url="https://task/", lease_ttl_s=900),
+        cs, ws, {"tabId": 7, "windowId": 1},
+    )
+    since = app.state.mcp_tab_leases[("main", 7)]["since"]
+
+    async def _gone(tab_id):
+        start = len(ws.sent)
+        task = asyncio.create_task(tools.get_text(app, instance="main", tab_id=tab_id))
+        for _ in range(400):
+            if len(ws.sent) > start:
+                break
+            await asyncio.sleep(0.005)
+        resolve_response(cs, {"type": "response", "id": ws.sent[-1]["id"], "ok": False,
+                              "error": {"code": protocol.ERR_NO_SUCH_TAB, "message": "gone"}})
+        with pytest.raises(tools.ToolError) as ei:
+            await task
+        return ei.value.code
+
+    # Gone, and no pass closed it (a human did): the bare code.
+    assert await _gone(7) == protocol.ERR_NO_SUCH_TAB
+
+    def _close(ts, tab_id):
+        return lambda c: insert_action(c, ts=ts, kind="dedupe_close", status="done",
+                                       initiator="curator", instance_from="main", tab_id=tab_id)
+
+    # A close from before the lease belongs to an older tab that had the same id.
+    await db.write(_close(since - 1, 7))
+    assert await _gone(7) == protocol.ERR_NO_SUCH_TAB
+    await db.write(_close(since, 7))
+    assert await _gone(7) == "tab_reaped"
+    # The pass closing a tab nobody leased is no news to report.
+    await db.write(_close(since, 8))
+    assert await _gone(8) == protocol.ERR_NO_SUCH_TAB
 
 
 async def test_open_tab_without_lease_ttl_writes_nothing_and_reports_nothing(tmp_path):
