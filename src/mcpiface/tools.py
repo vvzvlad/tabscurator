@@ -45,6 +45,7 @@ from src.curator import runner
 from src.db import state as state_read
 from src.db.actions import insert_action, normalize_url, set_action_status
 from src.db.settings_store import get_setting
+from src.db.tab_leases import get_tab_lease, upsert_tab_lease
 from src.ext import protocol
 from src.ext.commands import CommandError, send_command
 from src.rules import access as rules_access
@@ -654,7 +655,7 @@ async def _reaped(app, instance: str, tab_id) -> bool:
     """Whether the curator pass closed this tab ``open_tab`` leased (#72) — the one
     ``no_such_tab`` the agent could have prevented, told apart from "never existed" and
     "a human closed it". ``since`` keeps a close of an older tab with a reused id out."""
-    held = app.state.mcp_tab_leases.get((instance, tab_id))
+    held = await app.state.db.read(lambda c: get_tab_lease(c, instance, tab_id))
     if held is None:
         return False
     row = await app.state.db.read(lambda c: c.execute(
@@ -784,12 +785,8 @@ async def open_tab(app, *, instance: str, url: str, pinned: bool = False,
         # `*lease_plan` carries an instance id that has PASSED `_validate_instance` — the
         # value is the same string the caller sent (that function checks, it does not
         # normalise), so what the tuple adds is the check having happened, not a transform.
-        out["lease"] = await _write_open_lease(app, *lease_plan)
-        if out["lease"]["ok"]:
-            # Remembered per TAB (#72): navigate_tab carries it, and a reap reads tab_reaped.
-            app.state.mcp_tab_leases[(instance, result.get("tabId"))] = {
-                "since": _now_ms(), "until": lease_plan[2],
-            }
+        # Remembered per TAB too (#72): navigate_tab carries it, and a reap reads tab_reaped.
+        out["lease"] = await _write_open_lease(app, *lease_plan, tab_id=result.get("tabId"))
     return out
 
 
@@ -2472,7 +2469,8 @@ async def _plan_open_lease(app, instance: str, url: str, ttl_s: int) -> tuple[st
         raise ToolError(*_tool_error_from_http(exc))
 
 
-async def _write_open_lease(app, instance_id: str, url: str, until: int) -> dict:
+async def _write_open_lease(app, instance_id: str, url: str, until: int,
+                            tab_id: int | None = None) -> dict:
     """Best-effort exemption WRITE for a tab ``open_tab`` just opened — the "owned by the
     agent" lease. Every argument, ``instance_id`` included, was already validated by
     :func:`_plan_open_lease` — which is what keeps this ``_upsert`` and the one inside
@@ -2483,11 +2481,18 @@ async def _write_open_lease(app, instance_id: str, url: str, until: int) -> dict
     the agent to open a second one. The outcome is REPORTED instead, and an agent that
     needs the protection can see it did not get it. What remains here is genuinely a
     RUNTIME fault (a degraded DB, a disk full) — never a bad argument, which is refused
-    before the browser is touched at all."""
+    before the browser is touched at all.
+
+    With ``tab_id`` (open_tab), the per-tab row (#72) is written in the SAME transaction,
+    so a fault in either is the one reported ``lease_write_failed`` and never an exception
+    out of ``open_tab``; ``_carry_lease`` passes none and keeps the tab's existing row."""
+    def _write(c):
+        exemptions_api._upsert(c, instance_id, url, until, "mcp_lease")
+        if tab_id is not None:
+            upsert_tab_lease(c, instance_id, tab_id, _now_ms(), until)
+
     try:
-        await app.state.db.write(
-            lambda c: exemptions_api._upsert(c, instance_id, url, until, "mcp_lease")
-        )
+        await app.state.db.write(_write)
         return {"ok": True, "until": until, "reason": "mcp_lease"}
     except Exception as exc:  # noqa: BLE001 - a lease fault must not mask an open tab
         return {"ok": False, "error": "lease_write_failed", "message": str(exc)}
@@ -2500,7 +2505,7 @@ async def _carry_lease(app, instance: str, tab_id: int, url: str) -> dict:
     The pass matches a lease against the tab's LIVE url, so the agent's own navigation
     dropped it as silently as a redirect does. The url already passed the extension's
     http/https edge guard — the rule ``_validate_url`` applies — or the navigate failed."""
-    held = app.state.mcp_tab_leases.get((instance, tab_id))
+    held = await app.state.db.read(lambda c: get_tab_lease(c, instance, tab_id))
     if held is None or held["until"] <= _now_ms():
         return {}
     return {"lease": await _write_open_lease(app, instance, url, held["until"])}

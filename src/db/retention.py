@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from src.db.quick_links import prune_idempotency_keys
+from src.db.tab_leases import prune_tab_leases
 
 _MS_PER_DAY = 86_400_000
 
@@ -87,7 +88,11 @@ def run_retention(
     Three windows, three independent cutoffs: changing one never moves another. This
     single ``fn(conn)`` is what the app's periodic task hands to ``Database.write``.
     """
-    a = delete_old_actions(conn, cutoff_ms(now_ms, actions_retention_days))
+    actions_cutoff = cutoff_ms(now_ms, actions_retention_days)
+    a = delete_old_actions(conn, actions_cutoff)
+    # open_tab's per-tab leases share the actions horizon: `_reaped` only matters while
+    # matching actions rows exist.
+    prune_tab_leases(conn, actions_cutoff)
     j = delete_old_js_audit(conn, cutoff_ms(now_ms, js_audit_retention_days))
     k = prune_idempotency_keys(conn, cutoff_ms(now_ms, idempotency_retention_days))
     return RetentionResult(actions_deleted=a, js_audit_deleted=j, idempotency_keys_deleted=k)

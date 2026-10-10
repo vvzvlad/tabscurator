@@ -451,6 +451,40 @@ def test_step5_records_how_audited_code_ran_and_backfills_the_only_honest_answer
         conn.close()
 
 
+def test_step7_adds_tab_leases_keyed_by_instance_and_tab(tmp_path):
+    """open_tab's per-tab lease (#72) moves from process memory into ``tab_leases``: one
+    row per ``(instance_id, tab_id)``, so a second lease on the same tab must collide."""
+    db = str(tmp_path / "curator.db")
+    backups = str(tmp_path / "backups")
+    conn = _open(db)
+    try:
+        # A live-looking v6 database.
+        migrate(conn, db, backups, steps=STEPS[:6], max_version=6)
+        assert _version(conn) == 6
+        assert "tab_leases" not in _tables(conn)
+        conn.execute(
+            "INSERT INTO instances (id, status, secret_hash) VALUES ('main', 'active', 'h')"
+        )
+        conn.commit()
+
+        result = migrate(conn, db, backups)  # applies step 7 (head)
+        assert result.ok and not result.degraded
+        assert _version(conn) == MAX_VERSION
+        assert _columns(conn, "tab_leases") == {"instance_id", "tab_id", "leased_at", "until"}
+
+        conn.execute(
+            "INSERT INTO tab_leases (instance_id, tab_id, leased_at, until) "
+            "VALUES ('main', 7, 1, 2)"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO tab_leases (instance_id, tab_id, leased_at, until) "
+                "VALUES ('main', 7, 3, 4)"
+            )
+    finally:
+        conn.close()
+
+
 def test_failing_step_is_degraded_and_rolls_back(tmp_path):
     db = str(tmp_path / "curator.db")
     backups = str(tmp_path / "backups")
