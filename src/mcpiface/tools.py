@@ -1365,8 +1365,11 @@ async def scroll_until(app, *, instance: str, tab_id: int, count_selector: str,
     it exists for one measured reason: feeds built on ``IntersectionObserver`` do NOT fire
     in a BACKGROUND tab, so their content never loads and the count never grows — the scroll
     would spin to its deadline at a flat count. Focusing fixes that but takes the screen away
-    from the human, so it is an explicit opt-in, not the default. Turn it on only when a
-    background scroll stays flat.
+    from the human, so it is an explicit opt-in, not the default — and the second resort:
+    ``set_focus_emulation`` makes the hidden tab ``visible`` too while leaving the screen
+    alone (measured on avito, #73), so it is what the tool description sends a flat
+    background scroll to first. A count that stays flat in a visible tab is a collapsed block
+    or a "show more" button that scrolling does not open; neither cure applies to it.
 
     ``timeout_ms`` defaults to ``EXECUTE_JS_MAX_TIMEOUT_MS`` and is clamped to it, exactly as
     ``wait_for`` — a scroll with no stated length wants the longest the operator permits."""
@@ -1519,7 +1522,9 @@ async def set_focus_emulation(app, *, instance: str, tab_id: int, enabled: bool,
     """Toggle ``Emulation.setFocusEmulationEnabled`` on a tab via chrome.debugger (§12).
 
     The first verb down the CDP path (wave 18). It makes a BACKGROUND tab behave as focused
-    — no timer throttling — WITHOUT taking the screen from the human. STATEFUL by nature: the
+    and visible — no timer throttling, ``document.hasFocus()`` true, ``document.visibilityState``
+    ``visible``, so IntersectionObserver feeds load — WITHOUT taking the screen from the human
+    (measured on avito, #73). STATEFUL by nature: the
     emulation holds ONLY while the debugger stays attached, so ``enabled=true`` attaches and
     KEEPS the debugger attached, and ``enabled=false`` turns it off and detaches.
 
