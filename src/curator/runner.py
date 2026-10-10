@@ -326,6 +326,8 @@ async def run_pass(
     )
     ctx = None
     considered = 0
+    skipped: dict = {}
+    next_idle_at: int | None = None
     ready: dict = {}
     error: str | None = None
     deferred_plan: dict | None = None
@@ -409,10 +411,14 @@ async def run_pass(
             now=now, idle_ms=idle_ms, main_instance_id=settings.main_instance_id,
         )
         considered = decisions.considered
+        skipped = dict(decisions.skipped)
+        next_idle_at = decisions.next_idle_at
 
         if dry_run:
             return {"status": "dry_run",
-                    "plan": _plan(decisions, settings.max_actions_per_pass)}
+                    "plan": _plan(decisions, settings.max_actions_per_pass),
+                    "skipped": skipped,
+                    "next_idle_at": next_idle_at}
 
         # --- the plan-size threshold gate (§7) — the ONE mass-action brake ---
         # Cause-agnostic by design: a restored backup, a clean DB whose whole fleet
@@ -558,6 +564,10 @@ async def run_pass(
         return {"status": "error" if error else "dry_run", "error": error}
 
     actions_count = ctx.actions_count if ctx is not None else 0
+    # ``actions_count`` counts journal rows, including deferred / failed / abandoned
+    # ones; the owner-facing "done N" needs the split (#66). See PassCtx.
+    actions_performed = ctx.performed if ctx is not None else 0
+    not_performed = dict(ctx.not_performed) if ctx is not None else {}
     instances_ready = len(ready)
     # ok=0 when no instance was ready (§12: a pass that found nobody is NOT healthy)
     # or the pass errored; else ok=1.
@@ -584,6 +594,11 @@ async def run_pass(
             "instances_ready": instances_ready,
             "tabs_considered": considered,
             "actions_count": actions_count,
+            "actions_performed": actions_performed,
+            "actions_not_performed": sum(not_performed.values()),
+            "not_performed_by_reason": not_performed,
+            "skipped": skipped,
+            "next_idle_at": next_idle_at,
         }
 
     return {
@@ -592,6 +607,11 @@ async def run_pass(
         "instances_ready": instances_ready,
         "tabs_considered": considered,
         "actions_count": actions_count,
+        "actions_performed": actions_performed,
+        "actions_not_performed": sum(not_performed.values()),
+        "not_performed_by_reason": not_performed,
+        "skipped": skipped,
+        "next_idle_at": next_idle_at,
         "error": error,
     }
 
@@ -630,6 +650,8 @@ async def _write_deferred(ctx, to_instance: str, count: int, decision: str) -> N
 
     await ctx.db.write(lease.guarded(ctx.epoch, _w))
     ctx.actions_count += 1
+    # One row, ``count`` tabs that did not move: each is an action not performed (#66).
+    phases.note_not_performed(ctx, decision, count)
 
 
 def _clear_deferred_plan(conn: sqlite3.Connection) -> None:

@@ -883,7 +883,21 @@ export function createStore(deps = {}) {
     }
     const { status, body } = await postRunPass(fetchFn, base, token, { runAll: true });
     if (status >= 200 && status < 300) {
-      runNowResult.value = { status: (body && body.status) || "ok" };
+      // Beyond the status word, keep what the pass did and — at zero — why (#66): the
+      // row tells "moved 12" from "nothing to do" from "tabs not idle yet".
+      const b = body || {};
+      runNowResult.value = {
+        status: b.status || "ok",
+        actions_count: b.actions_count,
+        // actions_count also counts deferred / failed rows; these split it into what
+        // really happened and what did not, with the reasons.
+        actions_performed: b.actions_performed,
+        actions_not_performed: b.actions_not_performed,
+        not_performed_by_reason: b.not_performed_by_reason,
+        instances_ready: b.instances_ready,
+        skipped: b.skipped,
+        next_idle_at: b.next_idle_at,
+      };
       // The pass may have changed the mirror (relocations/closes) and the latch — re-read.
       await refresh();
       return { ok: true, status: runNowResult.value.status };

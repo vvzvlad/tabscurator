@@ -249,7 +249,7 @@ def test_a_posted_exemption_is_honoured_by_the_pass_step4_guard(tmp_path):
             exemptions=[(e["instance_id"], e["url"], e["until"]) for e in rows],
             quarantine=[],
         )
-        assert step4_passes(tab, mirror, now, 3600_000) is False   # protected
+        assert step4_passes(tab, mirror, now, 3600_000) == "exempt"   # protected
 
         # Non-vacuity: lift it and the very same tab becomes closable again.
         client.request(
@@ -260,7 +260,7 @@ def test_a_posted_exemption_is_honoured_by_the_pass_step4_guard(tmp_path):
             (e["instance_id"], e["url"], e["until"])
             for e in client.get("/api/exemptions", headers=AUTH).json()["exemptions"]
         ]
-        assert step4_passes(tab, mirror, now, 3600_000) is True
+        assert step4_passes(tab, mirror, now, 3600_000) is None
 
 
 # --- the URL must be one the pass can ever match ----------------------------

@@ -8,12 +8,15 @@ source-first, deferred-when-target-not-ready).
 
 from __future__ import annotations
 
+import pytest
+
 from src.curator.decide import (
     AbandonReloc,
     Close,
     PhaseAOpen,
     PhaseBVerify,
     decide,
+    step4_passes,
 )
 from src.curator.mirror import InstanceRow, Mirror, RelocRow, TabRow
 
@@ -423,4 +426,152 @@ def test_unready_source_tabs_skipped():
     rules = [_rule(1, "grafana.example.lc", "prox")]
     tabs = [_tab("main", 20, "https://grafana.example.lc/d/x")]
     res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"prox"})  # main NOT ready
+    assert res.is_empty()
+
+
+# --- #66: step 4 names WHY it skipped a tab, and the pass counts it -----------
+_X = "https://grafana.example.lc/d/x"
+
+# (reason, tab kwargs, main-instance kwargs, mirror kwargs): one tab per step-4 guard.
+_STEP4_CASES = [
+    ("not_http", {"url": "chrome://settings"}, {}, {}),
+    ("pinned", {"pinned": 1}, {}, {}),
+    ("audible", {"audible": 1}, {}, {}),
+    ("on_screen", {"active": 1}, {"focused_window_id": 1}, {}),
+    ("not_idle", {"last_active_at": NOW - 60_000}, {}, {}),
+    ("exempt", {}, {}, {"exemptions": [("main", _X, NOW + HOUR)]}),
+    ("quarantined", {}, {}, {"quarantine": [("main", _X, NOW + HOUR)]}),
+    ("no_window", {}, {}, {"windows": {}}),
+    ("no_window", {}, {}, {"windows": {("main", 1): ("normal", "fullscreen")}}),
+]
+_STEP4_IDS = ["not_http", "pinned", "audible", "on_screen", "not_idle", "exempt",
+              "quarantined", "no_window", "no_window_fullscreen"]
+
+
+def _step4_case(tab_kw, inst_kw, mirror_kw):
+    """A ruled tab in main (rule -> prox) tripping exactly one step-4 guard."""
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tab_kw = dict(tab_kw)
+    tab = _tab("main", 20, tab_kw.pop("url", _X), **tab_kw)
+    mirror = _mirror([tab], [_inst("main", **inst_kw), _inst("prox")], rules, **mirror_kw)
+    return tab, mirror
+
+
+@pytest.mark.parametrize("reason, tab_kw, inst_kw, mirror_kw", _STEP4_CASES, ids=_STEP4_IDS)
+def test_step4_passes_names_the_guard_that_rejected_the_tab(reason, tab_kw, inst_kw, mirror_kw):
+    tab, mirror = _step4_case(tab_kw, inst_kw, mirror_kw)
+    assert step4_passes(tab, mirror, NOW, IDLE) == reason
+
+
+@pytest.mark.parametrize(
+    "reason, tab_kw, inst_kw, mirror_kw",
+    [c for c in _STEP4_CASES if c[0] != "not_http"],
+    ids=[i for i in _STEP4_IDS if i != "not_http"],
+)
+def test_step4_reason_lands_in_its_own_counter_and_nowhere_else(
+    reason, tab_kw, inst_kw, mirror_kw
+):
+    tab, mirror = _step4_case(tab_kw, inst_kw, mirror_kw)
+    res = _decide(mirror, {"prox", "main"})
+    assert res.skipped == {reason: 1}
+    assert res.considered == 0
+    assert res.is_empty()
+    assert res.next_idle_at == (tab.last_active_at + IDLE if reason == "not_idle" else None)
+
+
+@pytest.mark.parametrize("instance_id", ["main", "media"])
+def test_a_non_http_tab_is_never_counted_even_where_the_drain_would_route_it(instance_id):
+    # A chrome:// page is rejected by step 4 unconditionally and no rule can match it,
+    # so no pass will ever act on it: it is not work waiting for anything. In a themed
+    # instance with the drain on, ``_route`` alone would send it to main — counting it
+    # would keep «всё под правилами уже на местах» out of reach on every themed browser.
+    rules = [_rule(1, "grafana.example.lc", "prox")]  # drain on
+    tab = _tab(instance_id, 20, "chrome://newtab/", last_active_at=NOW - 60_000)
+    res = _decide(
+        _mirror([tab], [_inst("main"), _inst("prox"), _inst("media")], rules),
+        {"main", "prox", "media"},
+    )
+    assert step4_passes(tab, _mirror([tab], [_inst(instance_id)]), NOW, IDLE) == "not_http"
+    assert res.skipped == {}
+    assert res.next_idle_at is None
+    assert res.is_empty()
+
+
+def test_a_tab_that_clears_step4_is_counted_as_considered_not_skipped():
+    # Non-vacuity for the counters above: the very same tab with no guard tripped.
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    res = _decide(_mirror([_tab("main", 20, _X)], [_inst("main"), _inst("prox")], rules),
+                  {"prox", "main"})
+    assert res.skipped == {}
+    assert res.next_idle_at is None
+    assert res.considered == 1
+    assert len(res.phase_a) == 1
+
+
+def test_next_idle_at_is_the_earliest_maturity_among_not_idle_tabs_only():
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [
+        _tab("main", 20, "https://grafana.example.lc/d/a", last_active_at=NOW - 10 * 60_000),
+        _tab("main", 21, "https://grafana.example.lc/d/b", last_active_at=NOW - 40 * 60_000),
+        # Matures soonest of all, but it is pinned: it counts as pinned and never as
+        # waiting, so it must not pull next_idle_at forward (#66 criterion 3).
+        _tab("main", 22, "https://grafana.example.lc/d/c", last_active_at=NOW - 59 * 60_000,
+             pinned=1),
+    ]
+    res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"prox", "main"})
+    assert res.skipped == {"not_idle": 2, "pinned": 1}
+    assert res.next_idle_at == NOW - 40 * 60_000 + IDLE
+
+
+# --- #66: only tabs the pass would act on are counted ------------------------
+def test_an_unruled_not_idle_tab_in_main_is_not_counted():
+    # main is where unruled tabs live: the pass never touches one, however long it idles.
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tab = _tab("main", 20, "https://news.example.lc/a", last_active_at=NOW - 60_000)
+    res = _decide(_mirror([tab], [_inst("main"), _inst("prox")], rules), {"main", "prox"})
+    assert res.skipped == {}
+    assert res.next_idle_at is None
+    assert res.is_empty()
+
+
+def test_a_ruled_tab_already_at_its_home_is_not_counted():
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    tabs = [
+        _tab("prox", 20, "https://grafana.example.lc/d/a", last_active_at=NOW - 60_000),
+        _tab("prox", 21, "https://grafana.example.lc/d/b", pinned=1),
+    ]
+    res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"})
+    assert res.skipped == {}
+    assert res.next_idle_at is None
+    assert res.is_empty()
+
+
+def test_next_idle_at_ignores_an_unruled_tab_that_would_mature_sooner():
+    # #66 criterion 2 on a real tab set: the ruled tab touched a minute ago is the one
+    # waiting; the unruled main tab touched 50 minutes ago matures first but is not
+    # the pass's business, so it must not become «ближайшая».
+    rules = [_rule(1, "grafana.example.lc", "prox")]
+    ruled = _tab("main", 20, _X, last_active_at=NOW - 60_000)
+    unruled = _tab("main", 21, "https://news.example.lc/a", last_active_at=NOW - 50 * 60_000)
+    res = _decide(_mirror([ruled, unruled], [_inst("main"), _inst("prox")], rules),
+                  {"main", "prox"})
+    assert res.skipped == {"not_idle": 1}
+    assert res.next_idle_at == ruled.last_active_at + IDLE
+    assert res.is_empty()
+
+
+def test_tabs_the_pass_would_drain_or_defer_are_counted():
+    # The other two branches the pass acts on: an unruled tab in a themed instance (the
+    # drain moves it to main) and a tab whose rule is orphaned (journalled deferred).
+    rules = [
+        _rule(1, "grafana.example.lc", "prox"),
+        _rule(2, "wiki.example.lc", "ghost", invalid=1),
+    ]
+    tabs = [
+        _tab("prox", 20, "https://news.example.lc/a", last_active_at=NOW - 60_000),
+        _tab("main", 21, "https://wiki.example.lc/p", last_active_at=NOW - 2 * 60_000),
+    ]
+    res = _decide(_mirror(tabs, [_inst("main"), _inst("prox")], rules), {"main", "prox"})
+    assert res.skipped == {"not_idle": 2}
+    assert res.next_idle_at == NOW - 2 * 60_000 + IDLE
     assert res.is_empty()
