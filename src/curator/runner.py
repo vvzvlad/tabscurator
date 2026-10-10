@@ -228,15 +228,22 @@ def _plan(decisions, threshold: int) -> dict:
 
 
 # --- isolation helper (§7: each tab in its own try/except) -------------------
-async def _isolated(coro) -> None:
+async def _isolated(coro, ctx=None) -> None:
     """Run one decision's execution; isolate ordinary failures but let a lost lease
-    propagate so the whole pass stops (§7)."""
+    propagate so the whole pass stops (§7).
+
+    With ``ctx``, a unit that raised unexpectedly before counting itself is counted as
+    not performed under ``unexpected_error`` (#66); one that already counted itself
+    gets nothing extra."""
+    before = ctx.performed + sum(ctx.not_performed.values()) if ctx is not None else 0
     try:
         await coro
     except lease.LeaseLost:
         raise
     except Exception:  # noqa: BLE001 - one bad tab must not sink the pass
         logger.exception("curator: isolated decision failed")
+        if ctx is not None and ctx.performed + sum(ctx.not_performed.values()) == before:
+            phases.note_not_performed(ctx, phases.NOT_PERFORMED_UNEXPECTED_ERROR)
 
 
 # --- the pass ----------------------------------------------------------------
@@ -404,7 +411,7 @@ async def run_pass(
                     c, now=now, cmd_timeout_ms=settings.cmd_timeout_ms
                 )
             ):
-                await _isolated(phases.run_reconcile(ctx, pending_row))
+                await _isolated(phases.run_reconcile(ctx, pending_row), ctx)
 
         decisions = decidemod.decide(
             mirror, ready_ids,
@@ -469,7 +476,7 @@ async def run_pass(
             for ab in decisions.abandon:
                 await _isolated(_abandon(ctx, ab))
             for dec in decisions.phase_b:
-                await _isolated(phases.run_phase_b(ctx, dec))
+                await _isolated(phases.run_phase_b(ctx, dec), ctx)
             # SKIPPED: deferred-row journaling, phase A, closes, window merges — the
             # countable work waits for the click; journaling a deferral that is itself
             # deferred would only muddy curator_deferred_total.
@@ -497,18 +504,20 @@ async def run_pass(
                 same_url = decisions.deferred_same_url.get(to_instance, 0)
                 if count - same_url > 0:
                     await _isolated(
-                        _write_deferred(ctx, to_instance, count - same_url, _DEFER_UNREADY)
+                        _write_deferred(ctx, to_instance, count - same_url, _DEFER_UNREADY),
+                        ctx,
                     )
                 if same_url > 0:
                     await _isolated(
-                        _write_deferred(ctx, to_instance, same_url, _DEFER_SAME_URL)
+                        _write_deferred(ctx, to_instance, same_url, _DEFER_SAME_URL),
+                        ctx,
                     )
             for dec in decisions.phase_b:
-                await _isolated(phases.run_phase_b(ctx, dec))
+                await _isolated(phases.run_phase_b(ctx, dec), ctx)
             for dec in decisions.phase_a:
-                await _isolated(phases.run_phase_a(ctx, dec))
+                await _isolated(phases.run_phase_a(ctx, dec), ctx)
             for dec in decisions.closes:
-                await _isolated(phases.run_close(ctx, dec))
+                await _isolated(phases.run_close(ctx, dec), ctx)
 
             # --- step 9: window merge (§9), LAST — the tab decisions (4-8) ran
             # against the STABLE window picture; only now do the instance's windows
@@ -521,7 +530,7 @@ async def run_pass(
                 mirror, ready_ids, now=now, idle_ms=idle_ms,
                 main_instance_id=settings.main_instance_id,
             ):
-                await _isolated(phases.run_window_merge(ctx, merge))
+                await _isolated(phases.run_window_merge(ctx, merge), ctx)
 
             # A pass that executed its (under-threshold or confirmed) plan clears the
             # latch: whatever was deferred either just ran or no longer exists (§7).
@@ -648,10 +657,12 @@ async def _write_deferred(ctx, to_instance: str, count: int, decision: str) -> N
             decision=decision,
         )
 
+    # ``count`` tabs that did not move: each is an action not performed (#66). Counted
+    # before the write: they are deferred whether or not the journal row lands, and a
+    # failed write must not shrink them to a single ``unexpected_error`` in _isolated.
+    phases.note_not_performed(ctx, decision, count)
     await ctx.db.write(lease.guarded(ctx.epoch, _w))
     ctx.actions_count += 1
-    # One row, ``count`` tabs that did not move: each is an action not performed (#66).
-    phases.note_not_performed(ctx, decision, count)
 
 
 def _clear_deferred_plan(conn: sqlite3.Connection) -> None:
