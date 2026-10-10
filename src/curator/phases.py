@@ -54,9 +54,10 @@ class PassCtx:
     # journalled (a deferred / failed / abandoned row; a deferred row aggregates
     # several tabs and counts each of them) or not (a unit that bailed out on a
     # readiness change, a command error, a step-4 guard or a changed survivor). Every
-    # executed phase-A / phase-B / close / merge unit that returns normally ends in
-    # exactly one of the two (an unexpected exception swallowed by runner._isolated
-    # counts in neither).
+    # executed phase-A / phase-B / close / merge unit ends in exactly one of the two —
+    # a unit that raised unexpectedly (swallowed by runner._isolated) before counting
+    # itself is counted as ``unexpected_error`` — except the one that lost the lease and
+    # stopped the pass.
     performed: int = 0
     not_performed: dict = field(default_factory=dict)  # reason -> count
 
@@ -81,6 +82,8 @@ NOT_PERFORMED_UNREADY = "target_not_ready"
 NOT_PERFORMED_BAD_REPLY = "bad_reply"
 # A dedupe / singleton survivor that navigated away before the close (SUGGESTION 4).
 NOT_PERFORMED_SURVIVOR_CHANGED = "survivor_changed"
+# A unit that raised unexpectedly (swallowed by runner._isolated) before counting itself.
+NOT_PERFORMED_UNEXPECTED_ERROR = "unexpected_error"
 
 
 def _ready_unchanged(ctx: PassCtx, instance_id: str) -> bool:

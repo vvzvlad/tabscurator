@@ -345,6 +345,7 @@ export default {
       no_such_tab: "вкладка пропала",
       survivor_changed: "вторая копия сменила адрес",
       bad_reply: "браузер прислал неполный ответ",
+      unexpected_error: "непредвиденная ошибка сервера",
       // A phase-B close turned away by its step-4 guard (the copy is already open).
       not_idle: "вкладку недавно трогали",
       pinned: "вкладка закреплена",

@@ -2216,3 +2216,138 @@ async def test_a_close_whose_source_reconnected_mid_pass_is_not_performed(tmp_pa
         assert res["not_performed_by_reason"] == {"readiness_changed": 1}
     finally:
         await db.close()
+
+
+# --- #66: a unit swallowed by runner._isolated is not performed, too ---------
+async def _two_ripe_tabs_for_prox(db):
+    """Two ripe ruled tabs in main with distinct urls: two phase-A units into prox."""
+    await _seed_rule(db, "grafana.example.lc", "prox")
+    ext = Ext(db)
+    await ext.add_instance("main", tabs=[
+        _tabinfo(20, "https://grafana.example.lc/d/x"),
+        _tabinfo(21, "https://grafana.example.lc/d/y"),
+    ])
+    await ext.add_instance("prox", tabs=[])
+    sent = []
+
+    def respond(iid, cmd, params):
+        sent.append(cmd)
+        if cmd == protocol.CMD_OPEN_TAB:
+            return {"ok": True, "result": {"tabId": ext.next_open_id(), "windowId": 1}}
+        return {"ok": True, "result": {}}
+    ext.responder = respond
+    return ext, sent
+
+
+async def test_a_unit_that_raised_before_counting_is_an_unexpected_error(tmp_path, monkeypatch):
+    """The first phase-A unit raises a plain exception before counting itself: it is
+    reported as not performed (unexpected_error), and the pass goes on to the next
+    unit, which opens its copy."""
+    db = await _mkdb(tmp_path)
+    try:
+        ext, sent = await _two_ripe_tabs_for_prox(db)
+        real = runner.phases.run_phase_a
+        calls = []
+
+        async def flaky(ctx, dec):
+            calls.append(dec.tab.tab_id)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            await real(ctx, dec)
+        monkeypatch.setattr(runner.phases, "run_phase_a", flaky)
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert len(calls) == 2
+        assert sent.count(protocol.CMD_OPEN_TAB) == 1
+        assert res["actions_performed"] == 1
+        assert res["actions_not_performed"] == 1
+        assert res["not_performed_by_reason"] == {"unexpected_error": 1}
+    finally:
+        await db.close()
+
+
+async def test_a_unit_that_counted_itself_then_raised_is_not_counted_again(tmp_path, monkeypatch):
+    """A phase-A unit opens its copy (counted as performed) and only then raises: no
+    unexpected_error on top — the unit is counted once."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[])
+        ext.responder = lambda i, c, p: (
+            {"ok": True, "result": {"tabId": ext.next_open_id(), "windowId": 1}}
+            if c == protocol.CMD_OPEN_TAB else {"ok": True, "result": {}}
+        )
+        real = runner.phases.run_phase_a
+
+        async def counted_then_raised(ctx, dec):
+            await real(ctx, dec)
+            raise RuntimeError("boom after counting")
+        monkeypatch.setattr(runner.phases, "run_phase_a", counted_then_raised)
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["actions_performed"] == 1
+        assert res["not_performed_by_reason"] == {}
+    finally:
+        await db.close()
+
+
+async def test_a_deferral_whose_row_failed_to_write_still_counts_every_tab(tmp_path, monkeypatch):
+    """Two tabs wait for an offline prox and the aggregated deferred row fails to write:
+    both tabs are still reported under their real reason, not as one unexpected_error."""
+    import sqlite3
+
+    from src.db import actions as actions_mod
+
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[
+            _tabinfo(20, "https://grafana.example.lc/d/x"),
+            _tabinfo(21, "https://grafana.example.lc/d/y"),
+        ])
+        await db.write(lambda c: c.execute(
+            "INSERT INTO instances (id, conn_epoch, connected, status) "
+            "VALUES ('prox', 1, 0, 'active')"))
+        ext.responder = lambda i, c, p: {"ok": True, "result": {}}
+        real_insert = actions_mod.insert_action
+
+        def failing_insert(conn, **kw):
+            if kw.get("status") == "deferred":
+                raise sqlite3.OperationalError("database or disk is full")
+            return real_insert(conn, **kw)
+        monkeypatch.setattr(actions_mod, "insert_action", failing_insert)
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["actions_not_performed"] == 2
+        assert res["not_performed_by_reason"] == {"target_not_ready": 2}
+        assert await _rows(db, "SELECT 1 FROM actions WHERE status='deferred'") == []
+    finally:
+        await db.close()
+
+
+async def test_a_unit_that_lost_the_lease_still_stops_the_pass(tmp_path, monkeypatch):
+    """LeaseLost from a unit is not swallowed: the pass stops at once (the second unit
+    never runs) and nothing is counted as unexpected_error."""
+    db = await _mkdb(tmp_path)
+    try:
+        ext, sent = await _two_ripe_tabs_for_prox(db)
+        calls = []
+
+        async def lease_lost(ctx, dec):
+            calls.append(dec.tab.tab_id)
+            raise lease_mod.LeaseLost("lease epoch gone")
+        monkeypatch.setattr(runner.phases, "run_phase_a", lease_lost)
+
+        res = await ext.run_pass()
+        assert res["error"] == "lease_lost"
+        assert len(calls) == 1
+        assert protocol.CMD_OPEN_TAB not in sent
+        assert res["not_performed_by_reason"] == {}
+    finally:
+        await db.close()
