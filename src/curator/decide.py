@@ -112,6 +112,16 @@ class Decisions:
     phase_a: list = field(default_factory=list)          # PhaseAOpen
     closes: list = field(default_factory=list)           # Close
     considered: int = 0                                  # tabs step 5-7 weighed
+    # Tabs step 4 turned away, per reason (the step4_passes return value) — but ONLY
+    # the ones the pass would act on once the guard lifts (see ``_would_act``): a tab
+    # with no rule in main, a tab already at its home or a chrome:// page is turned
+    # away too, yet the pass would never touch it, so counting it would report work
+    # that does not exist. Reporting only: nothing below reads it, so the pass
+    # decides exactly as before.
+    skipped: dict = field(default_factory=dict)          # reason -> count
+    # The earliest moment a COUNTED ``not_idle`` tab matures: min(last_active_at +
+    # idle_ms). None when no such tab was skipped.
+    next_idle_at: int | None = None
 
     def is_empty(self) -> bool:
         return not (self.abandon or self.phase_b or self.deferred or self.phase_a or self.closes)
@@ -132,8 +142,10 @@ def survivor_key(tab):
 
 
 # --- §7 step-4 guards (computable from the frozen mirror) --------------------
-def step4_passes(tab, mirror, now: int, idle_ms: int) -> bool:
-    """True if ``tab`` clears EVERY step-4 close guard (§7). False => skip it.
+def step4_passes(tab, mirror, now: int, idle_ms: int) -> str | None:
+    """None if ``tab`` clears EVERY step-4 close guard (§7), else the reason to skip it:
+    ``not_http``, ``pinned``, ``audible``, ``on_screen``, ``not_idle``, ``exempt``,
+    ``quarantined`` or ``no_window``.
 
     These guards apply to relocation AND to every close kind (§7): phase B,
     ``dedupe_close`` and ``singleton_close`` alike. The volatile ones are re-checked
@@ -141,11 +153,11 @@ def step4_passes(tab, mirror, now: int, idle_ms: int) -> bool:
     server-side gate against the frozen mirror.
     """
     if normalize_target(tab.url) is None:
-        return False  # non-http(s) never matches / never moves
+        return "not_http"  # non-http(s) never matches / never moves
     if tab.pinned:
-        return False  # pinned=1: "do not touch by hand" signal (§8)
+        return "pinned"  # pinned=1: "do not touch by hand" signal (§8)
     if tab.audible:
-        return False  # audible background media (§6/§7)
+        return "audible"  # audible background media (§6/§7)
     focused = mirror.instances.get(tab.instance_id)
     if (
         tab.active
@@ -153,23 +165,25 @@ def step4_passes(tab, mirror, now: int, idle_ms: int) -> bool:
         and focused is not None
         and tab.window_id == focused.focused_window_id
     ):
-        return False  # active AND its window is on screen (§5/§6)
+        return "on_screen"  # active AND its window is on screen (§5/§6)
     if (now - tab.last_active_at) < idle_ms:
-        return False  # not idle long enough (age_unknown reads as fresh → skipped)
+        return "not_idle"  # not idle long enough (age_unknown reads as fresh → skipped)
     norm = normalize_url(tab.url)
     for (inst, url, until) in mirror.exemptions:
         if inst == tab.instance_id and until is not None and until > now and normalize_url(url) == norm:
-            return False
+            return "exempt"
     for (inst, url, until) in mirror.quarantine:
         if inst == tab.instance_id and until is not None and until > now and normalize_url(url) == norm:
-            return False
+            return "quarantined"
     win = mirror.windows.get((tab.instance_id, tab.window_id))
     if win is None:
-        return False  # §6: a tab whose window is absent from the snapshot is skipped
+        return "no_window"  # §6: a tab whose window is absent from the snapshot is skipped
     wtype, wstate = win
     if wtype != "normal" or wstate == "fullscreen":
-        return False  # not a normal window, or a fullscreen showcase (§7)
-    return True
+        # Not a normal window, or a fullscreen showcase (§7): no window the pass may
+        # take a tab from, so it reports under the same reason as an absent one.
+        return "no_window"
+    return None
 
 
 # --- routing (§7 step 5) -----------------------------------------------------
@@ -235,6 +249,28 @@ def _route(tab, compiled_candidates, main_instance_id: str, drain_on: bool):
     if tab.instance_id != main_instance_id and drain_on:
         return main_instance_id, None, None
     return None, None, None
+
+
+def _would_act(tab, compiled_candidates, main_instance_id: str, drain_on: bool) -> bool:
+    """Would the pass act on ``tab`` if its step-4 guard were not in the way?
+
+    Reporting only (``Decisions.skipped`` / ``next_idle_at``), and answered by the SAME
+    pure ``_route`` the pass routes with, so it cannot drift from it. Mirrors the step
+    5-7 branches of :func:`decide`: an orphaned home is journalled as a deferral, a
+    home elsewhere is a relocation / dedupe / deferral; ``home is None`` (no rule in
+    main, or drain off) and ``home == own instance`` (already in place) are left alone.
+
+    A non-http(s) tab is never acted on, whatever ``_route`` says: no rule can match it
+    and step 4 rejects it unconditionally, so the unruled drain ``_route`` reports for
+    it in a themed instance is a move the pass will never make.
+
+    Known gap, kept on purpose: a tab already at its home can still meet step 8 (a
+    singleton or exact-duplicate close) once it matures; it is not counted here.
+    """
+    if normalize_target(tab.url) is None:
+        return False
+    home, _rule, orphan_home = _route(tab, compiled_candidates, main_instance_id, drain_on)
+    return orphan_home is not None or (home is not None and home != tab.instance_id)
 
 
 def _rule_instance(rule):
@@ -324,7 +360,16 @@ def decide(mirror, ready_ids: set, *, now: int, idle_ms: int, main_instance_id: 
             continue
         if (tab.instance_id, tab.tab_id) in owned:
             continue  # a live relocation owns it (§7: blocks question a's re-open)
-        if not step4_passes(tab, mirror, now, idle_ms):
+        reason = step4_passes(tab, mirror, now, idle_ms)
+        if reason is not None:
+            # Count it only if the pass would act on it once the guard lifts; the skip
+            # itself is unconditional either way.
+            if _would_act(tab, compiled_candidates, main_instance_id, drain_on):
+                res.skipped[reason] = res.skipped.get(reason, 0) + 1
+                if reason == "not_idle":
+                    ripe_at = tab.last_active_at + idle_ms
+                    if res.next_idle_at is None or ripe_at < res.next_idle_at:
+                        res.next_idle_at = ripe_at
             continue
         res.considered += 1
         home, rule, orphan_home = _route(

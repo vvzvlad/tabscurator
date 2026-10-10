@@ -209,6 +209,8 @@ async def test_phase_a_opens_copy_and_writes_relocate(tmp_path):
 
         res = await ext.run_pass()
         assert res["status"] == "ok"
+        # #66: the copy really opened, so it counts as performed.
+        assert (res["actions_performed"], res["actions_not_performed"]) == (1, 0)
         rel = await _rows(db, "SELECT instance_from, instance_to, tab_id, status, decision "
                               "FROM actions WHERE kind='relocate' AND status='done'")
         assert rel == [("main", "prox", 20, "done", "rule_home")]
@@ -307,6 +309,8 @@ async def test_source_discard_between_phases_completes(tmp_path):
         assert closed["tab"] == 77  # closed by URL match, not the stale hint 20
         rc = await _rows(db, "SELECT status, tab_id FROM actions WHERE kind='relocate_close'")
         assert rc == [("done", 77)]
+        # #66: phase B's close really happened => performed.
+        assert (res["actions_performed"], res["not_performed_by_reason"]) == (1, {})
         # Source tab removed from the mirror.
         assert await _rows(db, "SELECT 1 FROM tabs WHERE instance_id='main' AND tab_id=77") == []
     finally:
@@ -452,6 +456,9 @@ async def test_phase_b_source_epoch_bump_midpass_ejects_no_strike(tmp_path):
         # The relocate row is still live (not abandoned, not completed) — retries next pass.
         assert await _rows(db, "SELECT status FROM actions WHERE id=?", (reloc_id,)) == [("done",)]
         assert await _rows(db, "SELECT COUNT(*) FROM actions WHERE kind='relocate_close'") == [(0,)]
+        # #66: the ejected close is reported, not silently dropped.
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {"readiness_changed": 1}
     finally:
         await db.close()
 
@@ -527,6 +534,9 @@ async def test_phase_a_invalid_tab_id_writes_no_rows(tmp_path):
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='prox'") == [(0,)]
         assert await _rows(db, "SELECT COUNT(*) FROM quarantine") == [(0,)]
         assert res["actions_count"] == 0
+        # #66: no row, but the planned open did not happen => not performed.
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {"bad_reply": 1}
     finally:
         await db.close()
 
@@ -568,6 +578,9 @@ async def test_close_survivor_vanished_source_not_closed(tmp_path):
         # The source tab is still present; no dedupe_close row was written.
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='main' AND tab_id=20") == [(1,)]
         assert await _rows(db, "SELECT COUNT(*) FROM actions WHERE kind='dedupe_close'") == [(0,)]
+        # #66: the planned close did not happen, and the survivor's error says why.
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {protocol.ERR_NO_SUCH_TAB: 1}
     finally:
         await db.close()
 
@@ -700,6 +713,9 @@ async def test_reconcile_reverts_pending_when_source_still_present_no_double_clo
         assert closes == [20]
         # Source closed exactly once (tab removed from the mirror).
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='main' AND tab_id=20") == [(0,)]
+        # #66: the abandoned prior close is not performed; the re-issued one is.
+        assert res["actions_performed"] == 1
+        assert res["not_performed_by_reason"] == {"abandoned": 1}
     finally:
         await db.close()
 
@@ -774,6 +790,8 @@ async def test_reconcile_completes_pending_when_source_gone(tmp_path):
         assert res["status"] == "ok"
         assert await _rows(db, "SELECT status FROM actions WHERE id=?", (pending_id,)) == [("done",)]
         assert closes == []  # nothing to close — the source was already gone
+        # #66: the confirmed prior close counts as performed in this pass.
+        assert (res["actions_performed"], res["not_performed_by_reason"]) == (1, {})
         # Strikes reset by the completion (success on the pair, §7).
         assert await _rows(db, "SELECT strikes FROM quarantine "
                                "WHERE instance_id='main' AND url='https://grafana.example.lc/d/x'") == [(0,)]
@@ -812,6 +830,9 @@ async def test_close_precondition_failed_updates_pending_to_failed_and_strikes(t
                                "WHERE instance_id='main' AND url='https://grafana.example.lc/d/x'") == [(1,)]
         # Source NOT closed (precondition failed).
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='main' AND tab_id=20") == [(1,)]
+        # #66: the failed close is not performed, under its own reason.
+        assert (res["actions_performed"], res["not_performed_by_reason"]) == \
+            (0, {protocol.ERR_PRECONDITION_FAILED: 1})
     finally:
         await db.close()
 
@@ -843,6 +864,8 @@ async def test_dedupe_close_happy_path_one_done_row_tab_deleted(tmp_path):
         assert res["status"] == "ok"
         # Exactly one dedupe_close and it is done — no pending left behind.
         assert await _rows(db, "SELECT status FROM actions WHERE kind='dedupe_close'") == [("done",)]
+        # #66: the close really happened => performed.
+        assert (res["actions_performed"], res["not_performed_by_reason"]) == (1, {})
         assert await _rows(db, "SELECT COUNT(*) FROM tabs WHERE instance_id='main' AND tab_id=20") == [(0,)]
         assert await _rows(db, "SELECT strikes FROM quarantine "
                                "WHERE instance_id='main' AND url='https://grafana.example.lc/d/x'") == [(0,)]
@@ -1805,5 +1828,391 @@ async def test_armed_latch_pass_journals_no_deferrals_and_merges_no_windows(tmp_
             db, "SELECT instance_to, decision FROM actions WHERE status='deferred'"
         ) == [("ghost", "target_not_ready")]
         assert protocol.CMD_MERGE_WINDOWS in sent_cmds
+    finally:
+        await db.close()
+
+
+# --- #66: the pass says WHY it did nothing (skipped / next_idle_at) ----------
+async def test_pass_and_dry_run_report_the_same_skips_and_next_idle_at(tmp_path):
+    """A ruled tab touched a minute ago waits for IDLE_MINUTES; the same tab pinned is
+    counted as pinned, not as waiting. A dry run and the real pass over the same fleet
+    report the same counters, and next_idle_at is that tab's last_active_at + idle."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[
+            _tabinfo(20, "https://grafana.example.lc/d/a", age_ms=60_000),
+            _tabinfo(21, "https://grafana.example.lc/d/b", age_ms=60_000, pinned=True),
+        ])
+        await ext.add_instance("prox", tabs=[])
+        ext.responder = lambda i, c, p: {"ok": True, "result": {}}
+        last_active = "SELECT last_active_at FROM tabs WHERE instance_id='main' AND tab_id=20"
+
+        dry = await ext.run_pass(dry_run=True)
+        assert dry["skipped"] == {"not_idle": 1, "pinned": 1}
+        assert dry["next_idle_at"] == (await _rows(db, last_active))[0][0] + HOUR
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["actions_count"] == 0
+        assert res["skipped"] == dry["skipped"]
+        assert res["next_idle_at"] == (await _rows(db, last_active))[0][0] + HOUR
+    finally:
+        await db.close()
+
+
+async def test_a_latched_pass_reports_skips_too(tmp_path):
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[
+            _tabinfo(20, "https://grafana.example.lc/d/a"),
+            _tabinfo(21, "https://grafana.example.lc/d/b"),
+            _tabinfo(22, "https://grafana.example.lc/d/c", age_ms=60_000),
+        ])
+        await ext.add_instance("prox", tabs=[])
+        ext.responder = lambda i, c, p: {"ok": True, "result": {}}
+
+        res = await ext.run_pass(settings=_settings(max_actions_per_pass=1))
+        assert res["status"] == "resume_pending"
+        assert res["skipped"] == {"not_idle": 1}
+        assert res["next_idle_at"] is not None
+    finally:
+        await db.close()
+
+
+# --- #66: «действий N» counts only what the pass actually did ---------------
+async def test_an_offline_target_reports_zero_performed_one_not_performed(tmp_path):
+    """The ruled tab is ripe, but its home browser is registered and offline: the pass
+    journals one deferral row. actions_count still counts that row (unchanged), but
+    nothing moved, so the outcome must say 0 performed / 1 not performed and why."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        # prox is enrolled (the rule stays valid) but has no socket: never ready.
+        await db.write(lambda c: c.execute(
+            "INSERT INTO instances (id, conn_epoch, connected, status) "
+            "VALUES ('prox', 1, 0, 'active')"))
+        sent = []
+
+        def respond(iid, cmd, params):
+            sent.append(cmd)
+            return {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["actions_count"] == 1
+        assert res["actions_performed"] == 0
+        assert res["actions_not_performed"] == 1
+        assert res["not_performed_by_reason"] == {"target_not_ready": 1}
+        assert protocol.CMD_OPEN_TAB not in sent
+        assert await _rows(
+            db, "SELECT instance_to, decision FROM actions WHERE status='deferred'"
+        ) == [("prox", "target_not_ready")]
+    finally:
+        await db.close()
+
+
+async def test_a_performed_open_and_a_same_pass_duplicate_are_told_apart(tmp_path):
+    """Two identical ripe tabs: one copy is opened (performed), the other is held back
+    as a same-pass duplicate (not performed, its own reason)."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "main")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[])
+        await ext.add_instance("prox", tabs=[
+            _tabinfo(20, "https://grafana.example.lc/d/x"),
+            _tabinfo(21, "https://grafana.example.lc/d/x"),
+        ])
+        ext.responder = lambda i, c, p: (
+            {"ok": True, "result": {"tabId": ext.next_open_id(), "windowId": 1}}
+            if c == protocol.CMD_OPEN_TAB else {"ok": True, "result": {}}
+        )
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["actions_performed"] == 1
+        assert res["actions_not_performed"] == 1
+        assert res["not_performed_by_reason"] == {"dup_same_pass": 1}
+    finally:
+        await db.close()
+
+
+async def test_a_failed_close_is_not_performed(tmp_path):
+    """Phase B's close is refused (the source changed under it): one not performed,
+    reason precondition_failed, nothing performed."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/abc")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/abc")])
+        await _seed_relocate(
+            db, instance_from="main", instance_to="prox", tab_id=20,
+            session_id_from="s", tab_id_to=99, session_id_to="s",
+            url="https://grafana.example.lc/d/abc", url_norm="https://grafana.example.lc/d/abc",
+        )
+
+        def respond(iid, cmd, params):
+            if cmd == protocol.CMD_GET_TAB:
+                return {"ok": True, "result": {"tab": {"id": params["tabId"]}}}
+            if cmd == protocol.CMD_CLOSE_TAB:
+                return {"ok": False, "error": {"code": protocol.ERR_PRECONDITION_FAILED,
+                                               "message": "tab is active"}}
+            return {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert await _rows(
+            db, "SELECT status FROM actions WHERE kind='relocate_close'") == [("failed",)]
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {protocol.ERR_PRECONDITION_FAILED: 1}
+    finally:
+        await db.close()
+
+
+# --- #66: a planned action that silently did not happen is not performed, too ---
+_ABC = "https://grafana.example.lc/d/abc"
+
+
+async def _seed_reloc_abc(db):
+    """A live relocation main:20 -> prox:99 of ``_ABC`` (phase B's input)."""
+    return await _seed_relocate(
+        db, instance_from="main", instance_to="prox", tab_id=20,
+        session_id_from="s", tab_id_to=99, session_id_to="s", url=_ABC, url_norm=_ABC,
+    )
+
+
+def _err(code):
+    return {"ok": False, "error": {"code": code, "message": code}}
+
+
+async def test_a_failed_open_is_not_performed(tmp_path):
+    """open_tab fails (the human is dragging a tab in the target): no row is written,
+    yet the ripe ruled tab did not move — 0 performed / 1 not performed, and the
+    reason is the command's code. Before #66's fix this read as 0 / 0, i.e. «всё под
+    правилами уже на местах»."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[])
+        ext.responder = lambda i, c, p: (
+            _err(protocol.ERR_BUSY_DRAGGING) if c == protocol.CMD_OPEN_TAB
+            else {"ok": True, "result": {}}
+        )
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["tabs_considered"] == 1
+        assert res["actions_count"] == 0  # no journal row, unchanged
+        assert res["actions_performed"] == 0
+        assert res["actions_not_performed"] == 1
+        assert res["not_performed_by_reason"] == {protocol.ERR_BUSY_DRAGGING: 1}
+        assert res["skipped"] == {}
+    finally:
+        await db.close()
+
+
+async def test_phase_b_turned_away_by_its_step4_guard_is_not_performed(tmp_path):
+    """The source of a live relocation got pinned: phase B skips the close (the row
+    stays live). decide() never counts an owned tab in ``skipped``, so the guard's
+    reason must surface as the close not performed."""
+    db = await _mkdb(tmp_path)
+    try:
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, _ABC, pinned=True)])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, _ABC)])
+        await _seed_reloc_abc(db)
+        sent = []
+        ext.responder = lambda i, c, p: sent.append(c) or {"ok": True, "result": {}}
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert sent == []  # no get_tab, no close_tab
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {"pinned": 1}
+        assert res["skipped"] == {}
+    finally:
+        await db.close()
+
+
+async def test_phase_b_with_its_target_offline_is_not_performed(tmp_path):
+    """decide() checks only the SOURCE's readiness for phase B: a target that did not
+    answer this pass's snapshot is turned away in phase B and reported as such — not
+    as a mid-pass reconnect."""
+    db = await _mkdb(tmp_path)
+    try:
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, _ABC)])
+        # prox is enrolled (same session, so the row stays live) but has no socket:
+        # never ready this pass.
+        await db.write(lambda c: c.execute(
+            "INSERT INTO instances (id, conn_epoch, connected, session_id, status) "
+            "VALUES ('prox', 1, 0, 's', 'active')"))
+        await _seed_reloc_abc(db)
+        ext.responder = lambda i, c, p: {"ok": True, "result": {}}
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert res["instances_ready"] == 1
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {"target_not_ready": 1}
+    finally:
+        await db.close()
+
+
+@pytest.mark.parametrize("code", [protocol.ERR_NO_SUCH_TAB, protocol.ERR_TIMEOUT])
+async def test_phase_b_target_verify_failure_is_not_performed(tmp_path, code):
+    """The copy's get_tab fails (copy gone => the relocation is abandoned; a
+    connection-class code => it retries): either way the source is not closed."""
+    db = await _mkdb(tmp_path)
+    try:
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, _ABC)])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, _ABC)])
+        await _seed_reloc_abc(db)
+        sent = []
+
+        def respond(iid, cmd, params):
+            sent.append(cmd)
+            return _err(code) if cmd == protocol.CMD_GET_TAB else {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert protocol.CMD_CLOSE_TAB not in sent
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {code: 1}
+    finally:
+        await db.close()
+
+
+async def test_uncertain_closes_are_not_performed(tmp_path):
+    """A phase-B close and a dedupe close both time out: their outcome is unknown,
+    the pending rows stay for reconcile, and this pass reports both as not performed."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        y = "https://grafana.example.lc/d/y"
+        await ext.add_instance("main", tabs=[_tabinfo(20, _ABC), _tabinfo(21, y)])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, _ABC), _tabinfo(98, y)])
+        await _seed_reloc_abc(db)
+
+        def respond(iid, cmd, params):
+            if cmd == protocol.CMD_GET_TAB:
+                url = _ABC if params["tabId"] == 99 else y
+                return {"ok": True, "result": {"tab": {"id": params["tabId"], "url": url}}}
+            if cmd == protocol.CMD_CLOSE_TAB:
+                return _err(protocol.ERR_TIMEOUT)
+            return {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert await _rows(db, "SELECT kind, status FROM actions WHERE status='pending' "
+                               "ORDER BY kind") == [("dedupe_close", "pending"),
+                                                    ("relocate_close", "pending")]
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {protocol.ERR_TIMEOUT: 2}
+    finally:
+        await db.close()
+
+
+async def test_a_close_whose_survivor_navigated_away_is_not_performed(tmp_path):
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        await ext.add_instance("main", tabs=[_tabinfo(20, "https://grafana.example.lc/d/x")])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, "https://grafana.example.lc/d/x")])
+        sent = []
+
+        def respond(iid, cmd, params):
+            sent.append(cmd)
+            if cmd == protocol.CMD_GET_TAB:
+                return {"ok": True, "result": {"tab": {"id": params["tabId"],
+                                                       "url": "https://elsewhere.example/"}}}
+            return {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert protocol.CMD_CLOSE_TAB not in sent
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {"survivor_changed": 1}
+    finally:
+        await db.close()
+
+
+async def test_units_ejected_by_a_mid_pass_reconnect_are_not_performed(tmp_path):
+    """prox reconnects while phase B verifies its copy: phase B (already past its
+    target check) completes, but the later phase-A open INTO prox and the dedupe close
+    whose survivor sits in prox are ejected (§7) — both reported, neither silent."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        x = "https://grafana.example.lc/d/x"
+        y = "https://grafana.example.lc/d/y"
+        await ext.add_instance("main", tabs=[
+            _tabinfo(20, _ABC), _tabinfo(21, x), _tabinfo(22, y),
+        ])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, _ABC), _tabinfo(98, y)])
+        await _seed_reloc_abc(db)
+        sent = []
+
+        def respond(iid, cmd, params):
+            sent.append((iid, cmd))
+            if cmd == protocol.CMD_GET_TAB:
+                ext.registry.get("prox").conn_epoch += 1
+                return {"ok": True, "result": {"tab": {"id": params["tabId"], "url": _ABC}}}
+            return {"ok": True, "result": {"ok": True}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert ("prox", protocol.CMD_OPEN_TAB) not in sent
+        assert sent.count(("prox", protocol.CMD_GET_TAB)) == 1  # phase B only
+        assert res["actions_performed"] == 1  # phase B's close
+        assert res["not_performed_by_reason"] == {"readiness_changed": 2}
+    finally:
+        await db.close()
+
+
+async def test_a_close_whose_source_reconnected_mid_pass_is_not_performed(tmp_path):
+    """The survivor checks out, but the SOURCE reconnects meanwhile: the close is
+    ejected (no strike) and reported."""
+    db = await _mkdb(tmp_path)
+    try:
+        await _seed_rule(db, "grafana.example.lc", "prox")
+        ext = Ext(db)
+        x = "https://grafana.example.lc/d/x"
+        await ext.add_instance("main", tabs=[_tabinfo(20, x)])
+        await ext.add_instance("prox", tabs=[_tabinfo(99, x)])
+        sent = []
+
+        def respond(iid, cmd, params):
+            sent.append(cmd)
+            if cmd == protocol.CMD_GET_TAB:
+                ext.registry.get("main").conn_epoch += 1
+                return {"ok": True, "result": {"tab": {"id": params["tabId"], "url": x}}}
+            return {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert protocol.CMD_CLOSE_TAB not in sent
+        assert res["actions_performed"] == 0
+        assert res["not_performed_by_reason"] == {"readiness_changed": 1}
     finally:
         await db.close()

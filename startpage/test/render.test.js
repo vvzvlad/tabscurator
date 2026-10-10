@@ -867,7 +867,7 @@ describe("run all rules now button (§62 item 5)", () => {
     await flushPromises();
 
     expect(bodies[0]).toEqual({ run_all: true });
-    expect(wrapper.find('[data-role="run-now-result"]').text()).toContain("ok");
+    expect(wrapper.find('[data-role="run-now-result"]').text()).toContain("проход выполнен");
   });
 
   it("shows a non-contradictory note when the pass did not run (e.g. stopped)", async () => {
@@ -888,6 +888,129 @@ describe("run all rules now button (§62 item 5)", () => {
     const text = wrapper.find('[data-role="run-now-result"]').text();
     expect(text).toContain("не выполнен");
     expect(text).not.toContain("проход запущен");
+  });
+
+  // #66: an executed pass names its outcome instead of the bare «ok», and each of the
+  // four outcomes reads differently.
+  async function runNowText(body) {
+    const env = makeChrome({ tabs: [], messages: { get_identity: { instanceId: "me" } } });
+    const { fetchFn } = makeFetch({
+      state: { status: 200, body: { instances: [], tabs: [], quick_links: [], server_now: 1_000_000 } },
+      runPass: () => ({ status: 200, body }),
+    });
+    const wrapper = mount(App, {
+      props: { deps: { chromeApi: env.chrome, fetchFn, now: () => 1_000_000 } },
+    });
+    await flushPromises();
+    await wrapper.find('[data-role="run-rules-now"]').trigger("click");
+    await flushPromises();
+    return wrapper.find('[data-role="run-now-result"]').text();
+  }
+
+  it("a pass that did something shows how many actions", async () => {
+    const text = await runNowText({
+      status: "ok", instances_ready: 2, actions_count: 12, actions_performed: 12,
+      actions_not_performed: 0, not_performed_by_reason: {},
+      skipped: { not_idle: 3 }, next_idle_at: 1_000_000,
+    });
+    expect(text).toContain("действий 12");
+    expect(text).not.toContain("ждут выдержки");
+  });
+
+  it("a pass whose only action could not be performed says so and why", async () => {
+    // The server journals a deferred row for a ripe tab whose home browser is offline:
+    // actions_count is 1, but nothing moved. «действий 1» would be a lie.
+    const text = await runNowText({
+      status: "ok", instances_ready: 1, actions_count: 1, actions_performed: 0,
+      actions_not_performed: 1, not_performed_by_reason: { target_not_ready: 1 },
+      skipped: {}, next_idle_at: null,
+    });
+    expect(text).toContain("действий 0, не выполнено 1 (браузер-цель не на связи)");
+    expect(text).not.toContain("действий 1");
+    expect(text).not.toContain("всё под правилами");
+  });
+
+  it("an unjournalled command failure is not mistaken for «всё на местах»", async () => {
+    // open_tab answered busy_dragging: no journal row (actions_count 0), nothing skipped,
+    // yet a ripe ruled tab did not move.
+    const text = await runNowText({
+      status: "ok", instances_ready: 2, actions_count: 0, actions_performed: 0,
+      actions_not_performed: 1, not_performed_by_reason: { busy_dragging: 1 },
+      skipped: {}, next_idle_at: null,
+    });
+    expect(text).toContain("действий 0, не выполнено 1 (в браузере перетаскивают вкладку)");
+    expect(text).not.toContain("всё под правилами");
+  });
+
+  it("«действий N» is the performed count, not actions_count, and names the main reason", async () => {
+    const text = await runNowText({
+      status: "ok", instances_ready: 2, actions_count: 3, actions_performed: 0,
+      actions_not_performed: 3, not_performed_by_reason: { dup_same_pass: 1, target_not_ready: 2 },
+      skipped: { not_idle: 4 }, next_idle_at: 1_000_000 + 60_000,
+    });
+    expect(text).toContain("действий 0, не выполнено 3 (браузер-цель не на связи)");
+    expect(text).not.toContain("действий 3");
+  });
+
+  it("once the nearest tab has matured the row says so instead of a frozen «1 мин»", async () => {
+    const env = makeChrome({ tabs: [], messages: { get_identity: { instanceId: "me" } } });
+    let clock = 1_000_000;
+    const { fetchFn } = makeFetch({
+      state: { status: 200, body: { instances: [], tabs: [], quick_links: [], server_now: 1_000_000 } },
+      runPass: () => ({ status: 200, body: {
+        status: "ok", instances_ready: 1, actions_count: 0, actions_performed: 0,
+        actions_not_performed: 0, not_performed_by_reason: {},
+        skipped: { not_idle: 1 }, next_idle_at: 1_000_000 + 2 * 60_000,
+      } }),
+    });
+    const wrapper = mount(App, {
+      props: { deps: { chromeApi: env.chrome, fetchFn, now: () => clock } },
+    });
+    await flushPromises();
+    await wrapper.find('[data-role="run-rules-now"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-role="run-now-result"]').text())
+      .toContain("ждут выдержки 1, ближайшая через 2 мин");
+
+    // Past next_idle_at on the server's clock; the page's 1 s tick re-reads it.
+    clock = 1_000_000 + 2 * 60_000 + 1;
+    wrapper.vm.store.tick();
+    await flushPromises();
+    const text = wrapper.find('[data-role="run-now-result"]').text();
+    expect(text).toContain("ждут выдержки 1, ближайшая уже дозрела");
+    expect(text).not.toContain("через");
+  });
+
+  it("zero actions with tabs not idle yet names them and the nearest maturity", async () => {
+    const text = await runNowText({
+      status: "ok", instances_ready: 2, actions_count: 0,
+      skipped: { not_idle: 1, on_screen: 2 }, next_idle_at: 1_000_000 + 59 * 60_000,
+    });
+    expect(text).toContain("действий 0, ждут выдержки 1, ближайшая через 59 мин");
+  });
+
+  it("zero actions and none waiting names the most common skip reason", async () => {
+    const text = await runNowText({
+      status: "ok", instances_ready: 2, actions_count: 0,
+      skipped: { on_screen: 1, pinned: 3 }, next_idle_at: null,
+    });
+    expect(text).toContain("действий 0, закреплённых 3");
+    expect(text).not.toContain("ждут выдержки");
+  });
+
+  it("zero actions and nothing skipped says everything is already in place", async () => {
+    const text = await runNowText({
+      status: "ok", instances_ready: 2, actions_count: 0, skipped: {}, next_idle_at: null,
+    });
+    expect(text).toContain("действий 0, всё под правилами уже на местах");
+  });
+
+  it("no browser answered is said out loud, not hidden behind a status word", async () => {
+    const text = await runNowText({
+      status: "no_ready_instances", instances_ready: 0, actions_count: 0, skipped: {}, next_idle_at: null,
+    });
+    expect(text).toContain("ни один браузер не ответил");
+    expect(text).not.toContain("no_ready_instances");
   });
 });
 

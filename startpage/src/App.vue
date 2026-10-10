@@ -321,6 +321,75 @@ export default {
     async function onRunRulesNow() {
       await store.runRulesNow();
     }
+    // What the last «выполнить все правила сейчас» pass did (#66). The bare status read
+    // «ok» for twelve moves and for none alike, so an executed pass names its outcome:
+    // the count of actions it really performed (`actions_performed`, NOT
+    // `actions_count`, which also counts deferred / failed journal rows), or at zero
+    // the reason for zero — planned actions it could not perform (with the most
+    // common reason: a journalled deferral / failure, a command error, a reconnect, a
+    // close guard), else tabs still waiting for IDLE_MINUTES (with the nearest one;
+    // `next_idle_at` is a SERVER timestamp, so it is read against serverNow(), which
+    // also keeps the minutes ticking, and once it has passed the row says so instead of
+    // a frozen «1 мин»), else the most common step-4 skip reason, else nothing left to
+    // do. Null for any other status.
+    // Any other reason (a rarer §6 command code) is shown as the raw code.
+    const NOT_PERFORMED_LABELS = {
+      target_not_ready: "браузер-цель не на связи",
+      dup_same_pass: "такая же вкладка уже переносится",
+      precondition_failed: "вкладка изменилась перед закрытием",
+      abandoned: "закрытие из прошлого прохода не состоялось",
+      readiness_changed: "браузер переподключился во время прохода",
+      busy_dragging: "в браузере перетаскивают вкладку",
+      timeout: "браузер не ответил вовремя",
+      no_connection: "нет связи с браузером",
+      no_such_tab: "вкладка пропала",
+      survivor_changed: "вторая копия сменила адрес",
+      bad_reply: "браузер прислал неполный ответ",
+      // A phase-B close turned away by its step-4 guard (the copy is already open).
+      not_idle: "вкладку недавно трогали",
+      pinned: "вкладка закреплена",
+      audible: "вкладка звучит",
+      on_screen: "вкладка открыта на экране",
+      exempt: "на вкладке исключение",
+      quarantined: "вкладка в карантине",
+      // Both the step-4 reason and the §6 code from open_tab / merge_windows.
+      no_window: "окно закрылось или не подходит",
+    };
+    const SKIP_LABELS = {
+      not_http: "не http(s)",
+      pinned: "закреплённых",
+      audible: "звучащих",
+      on_screen: "открытых на экране",
+      exempt: "с исключением",
+      quarantined: "в карантине",
+      no_window: "вне обычного окна",
+    };
+    const runNowOutcome = computed(() => {
+      const r = store.runNowResult.value;
+      if (!r || r.status !== "ok") return null;
+      if (r.actions_performed > 0) return `действий ${r.actions_performed}`;
+      if (r.actions_not_performed > 0) {
+        const why = Object.entries(r.not_performed_by_reason || {})
+          .sort((a, b) => b[1] - a[1])[0];
+        const label = why ? NOT_PERFORMED_LABELS[why[0]] || why[0] : null;
+        return `действий 0, не выполнено ${r.actions_not_performed}` +
+          (label ? ` (${label})` : "");
+      }
+      const skipped = r.skipped || {};
+      if (skipped.not_idle > 0) {
+        let text = `действий 0, ждут выдержки ${skipped.not_idle}`;
+        if (typeof r.next_idle_at === "number") {
+          const left = r.next_idle_at - store.serverNow();
+          text += left > 0
+            ? `, ближайшая через ${Math.ceil(left / 60_000)} мин`
+            : ", ближайшая уже дозрела";
+        }
+        return text;
+      }
+      const top = Object.entries(skipped).sort((a, b) => b[1] - a[1])[0];
+      if (top) return `действий 0, ${SKIP_LABELS[top[0]]} ${top[1]}`;
+      return "действий 0, всё под правилами уже на местах";
+    });
 
     // --- open the enrollment window for a new browser (§13) -----------------
     async function onOpenEnrollment() {
@@ -580,6 +649,7 @@ export default {
       onResume,
       onRaiseInstance,
       onRunRulesNow,
+      runNowOutcome,
       onOpenEnrollment,
       enrollWindowMinutes,
       enrollWindowClosed,
@@ -970,7 +1040,8 @@ export default {
         >Выполнить все правила сейчас</button>
         <span v-if="store.runNowResult.value" class="sp-sub" data-role="run-now-result">
           <template v-if="store.runNowResult.value.error">— не удалось: {{ store.runNowResult.value.error }}</template>
-          <template v-else-if="store.runNowResult.value.status === 'ok'">— проход выполнен: {{ store.runNowResult.value.status }}</template>
+          <template v-else-if="runNowOutcome">— проход выполнен: {{ runNowOutcome }}</template>
+          <template v-else-if="store.runNowResult.value.status === 'no_ready_instances'">— проход не выполнен: ни один браузер не ответил</template>
           <template v-else>— проход не выполнен: {{ store.runNowResult.value.status }}</template>
         </span>
       </div>

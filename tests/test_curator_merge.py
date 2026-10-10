@@ -418,6 +418,8 @@ async def test_pass_issues_merge_command_journals_and_keeps_ages(tmp_path):
         assert wm[0][0] == "media" and wm[0][1] == "done" and wm[0][2] == "curator"
         assert '"targetWindowId": 1' in wm[0][3] and '"moved_tab_ids": [20]' in wm[0][3]
         assert res["actions_count"] == 1
+        # #66: the merge really happened => performed.
+        assert (res["actions_performed"], res["not_performed_by_reason"]) == (1, {})
 
         # §17: the pass did NOT re-stamp the merged tabs' ages — every tab (the moved
         # one included) is STILL idle by well over IDLE_MINUTES. A server that
@@ -496,5 +498,82 @@ async def test_merge_journal_excludes_tabs_closed_by_the_same_pass(tmp_path):
         # ... and the merge journal lists only the tab that could still move.
         detail = (await _rows(db, "SELECT detail FROM actions WHERE kind='window_merge'"))[0][0]
         assert '"moved_tab_ids": [21]' in detail
+    finally:
+        await db.close()
+
+
+def _two_window_media():
+    """media: window 1 (two tabs => target) and window 2 (one tab => folds in)."""
+    return dict(
+        tabs=[_tabinfo(10, window_id=1), _tabinfo(11, window_id=1), _tabinfo(20, window_id=2)],
+        windows=[
+            {"id": 1, "type": "normal", "state": "normal"},
+            {"id": 2, "type": "normal", "state": "normal"},
+        ],
+        focused=None,
+    )
+
+
+async def test_a_failed_merge_is_not_performed(tmp_path):
+    """#66: merge_windows fails (a drag in progress): nothing is journalled and nothing
+    moved — 0 performed / 1 not performed under the command's code, not «всё на местах»."""
+    db = await _mkdb(tmp_path)
+    try:
+        ext = _Ext(db)
+        await ext.add_instance("media", **_two_window_media())
+
+        def respond(iid, cmd, params):
+            if cmd == protocol.CMD_MERGE_WINDOWS:
+                return {"ok": False, "error": {"code": protocol.ERR_BUSY_DRAGGING,
+                                               "message": "dragging"}}
+            return {"ok": True, "result": {}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert await _rows(db, "SELECT COUNT(*) FROM actions WHERE kind='window_merge'") == [(0,)]
+        assert res["actions_performed"] == 0
+        assert res["actions_not_performed"] == 1
+        assert res["not_performed_by_reason"] == {protocol.ERR_BUSY_DRAGGING: 1}
+    finally:
+        await db.close()
+
+
+async def test_a_merge_ejected_by_a_mid_pass_reconnect_is_not_performed(tmp_path):
+    """#66: media reconnects during step 8 (its dedupe close): step 9 ejects its merge
+    (§7) — reported as not performed, while the close itself counts as performed."""
+    db = await _mkdb(tmp_path)
+    try:
+        await db.write(lambda c: c.execute(
+            "INSERT INTO rules (pattern, instance_id, singleton, invalid, created_at) "
+            "VALUES ('grafana.example.lc', 'prox', 0, 0, 0)"))
+        ext = _Ext(db)
+        media = _two_window_media()
+        media["tabs"].append(_tabinfo(21, window_id=2, url="https://grafana.example.lc/d/x"))
+        await ext.add_instance("media", **media)
+        await ext.add_instance(
+            "prox",
+            tabs=[_tabinfo(99, window_id=1, url="https://grafana.example.lc/d/x")],
+            windows=[{"id": 1, "type": "normal", "state": "normal"}],
+            focused=None,
+        )
+        sent = []
+
+        def respond(iid, cmd, params):
+            sent.append(cmd)
+            if cmd == protocol.CMD_GET_TAB:
+                return {"ok": True, "result": {"tab": {"id": params["tabId"],
+                                                       "url": "https://grafana.example.lc/d/x"}}}
+            if cmd == protocol.CMD_CLOSE_TAB:
+                ext.registry.get("media").conn_epoch += 1
+            return {"ok": True, "result": {"ok": True}}
+        ext.responder = respond
+
+        res = await ext.run_pass()
+        assert res["status"] == "ok"
+        assert protocol.CMD_MERGE_WINDOWS not in sent
+        assert res["actions_performed"] == 1  # the dedupe close
+        # The merge, plus media's three unruled tabs draining to the absent main.
+        assert res["not_performed_by_reason"] == {"readiness_changed": 1, "target_not_ready": 3}
     finally:
         await db.close()

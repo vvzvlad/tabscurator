@@ -47,6 +47,40 @@ class PassCtx:
     ready: dict               # instance_id -> Readiness captured at step 3 (§7)
     actions_count: int = 0    # incremented on every action row written
     closed: set = field(default_factory=set)  # (instance_id, tab_id) closed THIS pass
+    # What the pass did for the owner (#66). ``actions_count`` also grows on rows for
+    # work that did NOT happen, so the button cannot report it as "done N":
+    # ``performed`` counts the actions that really happened (a ``done`` row);
+    # ``not_performed`` counts per reason every planned action that did not happen —
+    # journalled (a deferred / failed / abandoned row; a deferred row aggregates
+    # several tabs and counts each of them) or not (a unit that bailed out on a
+    # readiness change, a command error, a step-4 guard or a changed survivor). Every
+    # executed phase-A / phase-B / close / merge unit that returns normally ends in
+    # exactly one of the two (an unexpected exception swallowed by runner._isolated
+    # counts in neither).
+    performed: int = 0
+    not_performed: dict = field(default_factory=dict)  # reason -> count
+
+
+def note_not_performed(ctx: PassCtx, reason: str, count: int = 1) -> None:
+    """Count ``count`` planned-but-not-carried-out actions under ``reason`` (#66)."""
+    ctx.not_performed[reason] = ctx.not_performed.get(reason, 0) + count
+
+
+# ``not_performed`` reasons this module names itself; the others are the §6 command
+# error code (``exc.code``) or the step-4 reason, passed through verbatim.
+# A prior pass's pending close that reconcile found never took effect (the source is
+# still there) and journalled ``abandoned``.
+NOT_PERFORMED_ABANDONED = "abandoned"
+# The instance reconnected / changed session after readiness was fixed (§7 mid-pass
+# eject), so the unit was skipped.
+NOT_PERFORMED_READINESS = "readiness_changed"
+# A phase-B target that did not answer this pass's snapshot at all (decide() checks
+# only the SOURCE's readiness). Same word as the runner's aggregated deferral row.
+NOT_PERFORMED_UNREADY = "target_not_ready"
+# ``open_tab`` answered without an int ``tabId`` (SUGGESTION 6): no rows written.
+NOT_PERFORMED_BAD_REPLY = "bad_reply"
+# A dedupe / singleton survivor that navigated away before the close (SUGGESTION 4).
+NOT_PERFORMED_SURVIVOR_CHANGED = "survivor_changed"
 
 
 def _ready_unchanged(ctx: PassCtx, instance_id: str) -> bool:
@@ -166,6 +200,7 @@ async def run_phase_a(ctx: PassCtx, dec) -> None:
     # reconnected/changed session since readiness was captured. No open, no rows.
     if not _ready_unchanged(ctx, home) or not _ready_unchanged(ctx, tab.instance_id):
         logger.info("phase A deferred (instance readiness changed): {} -> {}", tab.url, home)
+        note_not_performed(ctx, NOT_PERFORMED_READINESS)
         return
     # Phase A is one of the two units whose browser command precedes its first guarded
     # write, so nothing else would notice a pause armed a moment ago until AFTER a tab
@@ -194,6 +229,7 @@ async def run_phase_a(ctx: PassCtx, dec) -> None:
         # Open failure is connection-class (target dropped / epoch changed): defer,
         # never a strike (§7). The tab retries next pass. No copy, no relocate row.
         logger.info("phase A open deferred for {} -> {}: {}", tab.url, home, exc.code)
+        note_not_performed(ctx, exc.code)
         return
     tab_id_to = result.get("tabId")
     window_id_to = result.get("windowId")
@@ -207,6 +243,7 @@ async def run_phase_a(ctx: PassCtx, dec) -> None:
             "phase A open returned no int tabId for {} -> {}: {!r}; not writing rows",
             tab.url, home, tab_id_to,
         )
+        note_not_performed(ctx, NOT_PERFORMED_BAD_REPLY)
         return
     session_from = _session_of(ctx, tab.instance_id)
     if session_from is None:
@@ -240,6 +277,7 @@ async def run_phase_a(ctx: PassCtx, dec) -> None:
 
     await ctx.db.write(lease.guarded(ctx.epoch, _write))
     ctx.actions_count += 1
+    ctx.performed += 1
 
 
 # --- phase B: verify source (already), verify target, close source (§7) ------
@@ -250,13 +288,24 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
 
     # Close guards apply to phase B too (§7 step 4). The source is a >1h background
     # tab so it clears idle, but it may have become pinned/audible/active-in-focus.
-    if not step4_passes(source_tab, ctx.mirror, ctx.now, ctx.idle_ms):
+    # decide() does not count an owned (phase-B) tab in ``skipped``, so the guard's
+    # reason is reported here, as this relocation's close not performed.
+    guard = step4_passes(source_tab, ctx.mirror, ctx.now, ctx.idle_ms)
+    if guard is not None:
+        note_not_performed(ctx, guard)
         return  # skip this pass; the relocate row stays live and retries.
 
     # §7 mid-pass eject: the target reconnected/changed session since readiness =>
     # its captured tab_id_to is stale; defer (leave the relocate row live, no strike).
     if not _ready_unchanged(ctx, reloc.instance_to):
         logger.info("phase B deferred (target readiness changed) for reloc {}", reloc.id)
+        # decide() checks only the SOURCE's readiness, so this is also where a target
+        # that never answered this pass's snapshot lands — say which of the two it was.
+        note_not_performed(
+            ctx,
+            NOT_PERFORMED_UNREADY if reloc.instance_to not in ctx.ready
+            else NOT_PERFORMED_READINESS,
+        )
         return
 
     # Verify the TARGET (source already verified by the URL match in decide).
@@ -266,6 +315,8 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
             {"tabId": reloc.tab_id_to}, cmd_timeout_ms=ctx.settings.cmd_timeout_ms,
         )
     except CommandError as exc:
+        # Either way the source is not closed this pass (#66).
+        note_not_performed(ctx, exc.code)
         if exc.code == protocol.ERR_NO_SUCH_TAB:
             # Copy vanished since the snapshot => abandon; next pass restarts phase A.
             await ctx.db.write(lease.guarded(ctx.epoch, lambda c: mark_action_abandoned(c, reloc.id)))
@@ -279,6 +330,7 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
     # live, no strike). This is exactly the WARNING-3 reconnect case.
     if not _ready_unchanged(ctx, reloc.instance_from):
         logger.info("phase B deferred (source readiness changed) for reloc {}", reloc.id)
+        note_not_performed(ctx, NOT_PERFORMED_READINESS)
         return
 
     # Copy is alive => complete the relocation at-least-once (§7, WARNING-1).
@@ -315,11 +367,15 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
                 _strike_once(conn, ctx, reloc.instance_from, url_norm, protocol.ERR_PRECONDITION_FAILED)
             await ctx.db.write(lease.guarded(ctx.epoch, _fail))
             ctx.actions_count += 1
+            note_not_performed(ctx, protocol.ERR_PRECONDITION_FAILED)
             return
         # Connection-class: the close is UNCERTAIN. LEAVE the pending row — next pass's
         # reconcile resolves it against the fresh mirror (→ done if the source is gone,
         # → abandoned if it is still present). Do NOT delete it.
         logger.info("phase B close deferred for reloc {}: {}", reloc.id, exc.code)
+        # Not confirmed this pass; if it did happen, the reconcile that confirms it
+        # counts it as performed then.
+        note_not_performed(ctx, exc.code)
         return
 
     # Source closed => complete: pending → done, drop the source, reset strikes (§7).
@@ -336,6 +392,7 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
     # "moved" — it no longer exists (§9).
     ctx.closed.add((reloc.instance_from, source_tab.tab_id))
     ctx.actions_count += 1
+    ctx.performed += 1
 
 
 # --- dedupe / singleton closes (§7 step 7 q2, step 8) -----------------------
@@ -366,6 +423,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
         # §7 mid-pass eject also covers the survivor's instance.
         if not _ready_unchanged(ctx, survivor.instance_id):
             logger.info("close deferred (survivor readiness changed) for {}", tab.url)
+            note_not_performed(ctx, NOT_PERFORMED_READINESS)
             return
         try:
             got = await send_command(
@@ -376,11 +434,13 @@ async def run_close(ctx: PassCtx, dec) -> None:
             # Survivor gone (no_such_tab) => do NOT close the source (it is the last
             # copy). Connection-class => defer. Either way skip; re-decide next pass.
             logger.info("close skipped (survivor verify {}) for {}", exc.code, tab.url)
+            note_not_performed(ctx, exc.code)
             return
         survivor_url = (got.get("tab") or {}).get("url")
         if survivor_url != survivor.url:
             # Survivor navigated away => the url is no longer duplicated; do not close.
             logger.info("close skipped (survivor url changed) for {}", tab.url)
+            note_not_performed(ctx, NOT_PERFORMED_SURVIVOR_CHANGED)
             return
 
     # §7 mid-pass eject: the source reconnected/changed session since readiness => its
@@ -388,6 +448,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
     # healthy url. Defer (no strike, no action row).
     if not _ready_unchanged(ctx, tab.instance_id):
         logger.info("close deferred (source readiness changed) for {}", tab.url)
+        note_not_performed(ctx, NOT_PERFORMED_READINESS)
         return
 
     # At-least-once close journaling (§7, WARNING-1): record the close row as `pending`
@@ -422,9 +483,12 @@ async def run_close(ctx: PassCtx, dec) -> None:
                 _strike_once(conn, ctx, tab.instance_id, url_norm, protocol.ERR_PRECONDITION_FAILED)
             await ctx.db.write(lease.guarded(ctx.epoch, _fail))
             ctx.actions_count += 1
+            note_not_performed(ctx, protocol.ERR_PRECONDITION_FAILED)
             return
         # Connection-class: the close is UNCERTAIN. LEAVE the pending row for reconcile.
         logger.info("close deferred for {} ({}): {}", tab.url, dec.kind, exc.code)
+        # Not confirmed this pass; a reconcile that later confirms it counts it then.
+        note_not_performed(ctx, exc.code)
         return
 
     # Source closed => complete: pending → done, drop the tab, reset strikes (§7).
@@ -439,6 +503,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
     # "moved" — it no longer exists (§9).
     ctx.closed.add((tab.instance_id, tab.tab_id))
     ctx.actions_count += 1
+    ctx.performed += 1
 
 
 # --- reconcile: resolve prior-pass pending closes (§7, WARNING-1) -----------
@@ -522,6 +587,7 @@ async def run_reconcile(ctx: PassCtx, row) -> None:
             lease.guarded(ctx.epoch, lambda c: mark_action_abandoned(c, row["id"]))
         )
         ctx.actions_count += 1
+        note_not_performed(ctx, NOT_PERFORMED_ABANDONED)
         return
 
     def _complete(conn: sqlite3.Connection) -> None:
@@ -537,6 +603,9 @@ async def run_reconcile(ctx: PassCtx, row) -> None:
 
     await ctx.db.write(lease.guarded(ctx.epoch, _complete))
     ctx.actions_count += 1
+    # The close really happened earlier, unconfirmed until now, and no pass counted it
+    # then (an uncertain close is never counted): counted once, here, as performed.
+    ctx.performed += 1
 
 
 # --- step 9: window merge (§9) ----------------------------------------------
@@ -559,6 +628,7 @@ async def run_window_merge(ctx: PassCtx, merge) -> None:
     # invalidates the snapshot's window & tab ids; defer (no command, no row).
     if not _ready_unchanged(ctx, merge.instance_id):
         logger.info("window merge deferred (instance readiness changed): {}", merge.instance_id)
+        note_not_performed(ctx, NOT_PERFORMED_READINESS)
         return
     # Like phase A, this command precedes the unit's first guarded write — check the
     # fencing epoch so a paused curator stops rearranging windows (see
@@ -577,6 +647,7 @@ async def run_window_merge(ctx: PassCtx, merge) -> None:
     except CommandError as exc:
         # Transient (busy_dragging) or connection-class: retry next pass, no row (§9).
         logger.info("window merge deferred for {}: {}", merge.instance_id, exc.code)
+        note_not_performed(ctx, exc.code)
         return
 
     # §9 wants the list of tabs that were actually MOVED. The plan came from the mirror
@@ -613,3 +684,4 @@ async def run_window_merge(ctx: PassCtx, merge) -> None:
 
     await ctx.db.write(lease.guarded(ctx.epoch, _write))
     ctx.actions_count += 1
+    ctx.performed += 1
