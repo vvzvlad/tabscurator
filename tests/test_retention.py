@@ -11,6 +11,7 @@ from src.db.actions import insert_action
 from src.db.audit import insert_js_audit
 from src.db.quick_links import idempotency_key_seen, record_idempotency_key
 from src.db.retention import cutoff_ms, run_retention
+from src.db.tab_leases import get_tab_lease, upsert_tab_lease
 
 _MS_PER_DAY = 86_400_000
 ACTIONS_DAYS = 90
@@ -111,6 +112,30 @@ async def test_retention_prunes_old_idempotency_keys(tmp_path):
             )
         )
         assert remaining == ["qlkey:paused-batch", "qlkey:recent-batch"]
+    finally:
+        await db.close()
+
+
+async def test_retention_prunes_old_tab_leases_and_keeps_live_ones(tmp_path):
+    """``tab_leases`` rows share the ``actions`` horizon: a lease that expired longer ago
+    than the actions window is dropped (an agent is not expected to address that tab id
+    any more)."""
+    db = await _make_db(tmp_path)
+    try:
+        now = 2_000 * _MS_PER_DAY
+
+        def seed(c):
+            upsert_tab_lease(c, "main", 1, now - 201 * _MS_PER_DAY,
+                             now - 200 * _MS_PER_DAY)   # drop
+            upsert_tab_lease(c, "main", 2, now - 1 * _MS_PER_DAY,
+                             now + 1 * _MS_PER_DAY)     # keep (live)
+
+        await db.write(seed)
+        await db.write(lambda c: run_retention(c, now, ACTIONS_DAYS, JS_AUDIT_DAYS))
+
+        assert await db.read(lambda c: get_tab_lease(c, "main", 1)) is None
+        assert await db.read(lambda c: get_tab_lease(c, "main", 2)) == {
+            "since": now - 1 * _MS_PER_DAY, "until": now + 1 * _MS_PER_DAY}
     finally:
         await db.close()
 

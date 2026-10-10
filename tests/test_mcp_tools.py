@@ -23,6 +23,7 @@ from src.db import state as state_read
 from src.db.access import Database
 from src.db.audit import insert_js_audit  # noqa: F401  (schema presence)
 from src.db.settings_store import get_setting, set_setting
+from src.db.tab_leases import get_tab_lease
 from src.ext import protocol
 from src.ext.commands import CommandError, resolve_response
 from src.ext.registry import ConnState, Registry
@@ -63,8 +64,7 @@ def _app(db, registry=None, settings=None):
     registry = registry if registry is not None else Registry()
     settings = settings if settings is not None else _settings()
     return SimpleNamespace(
-        state=SimpleNamespace(db=db, ext_registry=registry, settings=settings,
-                              mcp_tab_leases={})
+        state=SimpleNamespace(db=db, ext_registry=registry, settings=settings)
     )
 
 
@@ -3246,7 +3246,9 @@ async def test_navigate_tab_carries_a_live_open_tab_lease_to_the_new_url(tmp_pat
     assert rows == [(u, lease_out["until"], "mcp_lease")
                     for u in ("https://task/", "https://task/step2", "https://task/step3")]
     # A tab open_tab never leased, and a lease that has run out, carry nothing.
-    app.state.mcp_tab_leases[("main", 7)]["until"] = tools._now_ms() - 1
+    expired = tools._now_ms() - 1
+    await db.write(lambda c: c.execute(
+        "UPDATE tab_leases SET until = ? WHERE instance_id = 'main' AND tab_id = 7", (expired,)))
     for tab_id in (8, 7):
         out, _ = await _run_with_response(
             lambda: tools.navigate_tab(app, instance="main", tab_id=tab_id, url="https://x/"),
@@ -3272,7 +3274,7 @@ async def test_a_leased_tab_the_pass_closed_answers_tab_reaped(tmp_path):
         lambda: tools.open_tab(app, instance="main", url="https://task/", lease_ttl_s=900),
         cs, ws, {"tabId": 7, "windowId": 1},
     )
-    since = app.state.mcp_tab_leases[("main", 7)]["since"]
+    since = (await db.read(lambda c: get_tab_lease(c, "main", 7)))["since"]
 
     async def _gone(tab_id):
         start = len(ws.sent)
@@ -3302,6 +3304,39 @@ async def test_a_leased_tab_the_pass_closed_answers_tab_reaped(tmp_path):
     # The pass closing a tab nobody leased is no news to report.
     await db.write(_close(since, 8))
     assert await _gone(8) == protocol.ERR_NO_SUCH_TAB
+
+
+async def test_an_open_tab_lease_survives_a_service_restart(tmp_path):
+    """#72's per-tab lease lives in the database, not in process memory: a fresh app over
+    the same database file still carries it on navigation and still reads a reap."""
+    from src.db.actions import insert_action
+
+    db = await _make_db(tmp_path)
+    await _known_instance(db)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    opened, _ = await _run_with_response(
+        lambda: tools.open_tab(_app(db, reg), instance="main", url="https://task/",
+                               lease_ttl_s=900),
+        cs, ws, {"tabId": 7, "windowId": 1},
+    )
+    await db.close()
+
+    # The restart: a new Database and a new app object over the same file.
+    db2 = await _make_db(tmp_path)
+    app2 = _app(db2, Registry())
+    try:
+        held = await db2.read(lambda c: get_tab_lease(c, "main", 7))
+        assert held["until"] == opened["lease"]["until"]
+        assert await tools._carry_lease(app2, "main", 7, "https://task/step2") == {
+            "lease": opened["lease"]}
+        assert await tools._reaped(app2, "main", 7) is False
+        await db2.write(lambda c: insert_action(
+            c, ts=held["since"], kind="dedupe_close", status="done", initiator="curator",
+            instance_from="main", tab_id=7))
+        assert await tools._reaped(app2, "main", 7) is True
+    finally:
+        await db2.close()
 
 
 async def test_open_tab_without_lease_ttl_writes_nothing_and_reports_nothing(tmp_path):
@@ -3344,6 +3379,32 @@ async def test_a_failed_lease_WRITE_is_REPORTED_and_never_fails_the_open(tmp_pat
     assert out["lease"] == {"ok": False, "error": "lease_write_failed",
                             "message": "disk I/O error"}
     assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM exemptions").fetchone()) == (0,)
+
+
+async def test_a_failed_per_tab_lease_row_is_reported_like_the_exemption_and_rolls_it_back(
+        tmp_path, monkeypatch):
+    """The #72 row rides the exemption's transaction: its fault is the same reported
+    ``lease_write_failed`` (never an exception out of an open that happened), and it takes
+    the exemption down with it, so no lease is half-held."""
+    db = await _make_db(tmp_path)
+    await _known_instance(db)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+
+    def _boom(*_a):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(tools, "upsert_tab_lease", _boom)
+    out, _frame = await _run_with_response(
+        lambda: tools.open_tab(_app(db, reg), instance="main", url="https://task/",
+                               lease_ttl_s=600),
+        cs, ws, {"tabId": 7, "windowId": 1},
+    )
+    assert out["ok"] is True and out["result"] == {"tabId": 7, "windowId": 1}
+    assert out["lease"] == {"ok": False, "error": "lease_write_failed",
+                            "message": "disk I/O error"}
+    assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM exemptions").fetchone()) == (0,)
+    assert await db.read(lambda c: get_tab_lease(c, "main", 7)) is None
 
 
 async def test_an_INVALID_lease_argument_is_refused_before_the_tab_is_opened(tmp_path):

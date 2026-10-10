@@ -271,6 +271,14 @@ exemptions(
   PRIMARY KEY (instance_id, url)
 )
 
+tab_leases(                             -- аренда open_tab ПО ВКЛАДКЕ (миграция 7, #72)
+  instance_id TEXT NOT NULL,
+  tab_id INTEGER NOT NULL,
+  leased_at INTEGER NOT NULL,           -- когда open_tab взял аренду
+  until INTEGER NOT NULL,               -- срок аренды, тот же, что у строки exemptions
+  PRIMARY KEY (instance_id, tab_id)
+)
+
 quick_links(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   url TEXT NOT NULL UNIQUE,
@@ -373,6 +381,30 @@ ALTER TABLE instances DROP COLUMN allow_debugger;
 `IF EXISTS` здесь нет намеренно — защита от повторного применения одна и общая для всех
 шагов: `PRAGMA user_version` перечитывается ВНУТРИ `BEGIN IMMEDIATE`, поэтому второй
 контейнер катящегося релиза шаг пропускает, а не роняет старт.
+
+**Миграция 7 — аренда open_tab по вкладке (#72).** `open_tab {lease_ttl_s}` пишет строку
+`exemptions`, а она ключуется по URL; какой именно вкладке досталась аренда, помнил только
+словарь в памяти процесса — и рестарт сервиса его терял: `navigate_tab` переставал
+переносить живую аренду на новый URL, а вкладка, закрытая проходом, отвечала
+`no_such_tab` вместо `tab_reaped`. Теперь это таблица:
+
+```sql
+CREATE TABLE tab_leases (
+    instance_id TEXT NOT NULL,
+    tab_id INTEGER NOT NULL,
+    leased_at INTEGER NOT NULL,
+    until INTEGER NOT NULL,
+    PRIMARY KEY (instance_id, tab_id)
+);
+```
+
+Строка пишется в ТОЙ ЖЕ транзакции, что и строка `exemptions`, поэтому сбой любой из двух
+— один и тот же отчёт `lease_write_failed`, а не половина аренды. `leased_at` отсекает
+закрытие более старой вкладки с переиспользованным `tab_id`: строка `actions` до момента
+аренды к этой вкладке не относится. Перенос аренды при `navigate_tab` строку не трогает —
+`leased_at` остаётся моментом исходной аренды. Ретеншн подрезает таблицу по горизонту
+`actions` (`ACTIONS_RETENTION_DAYS`): аренда, истёкшая раньше этого окна, удаляется — читать
+её `tab_reaped` уже не по чему.
 
 `actions.kind ∈ {relocate, dedupe_close, singleton_close, window_merge, reset,
 restore}` — физическая операция. `actions.status ∈ {done, failed, deferred}` —

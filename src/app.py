@@ -159,10 +159,6 @@ def create_app(settings) -> Starlette:
         # shared by the periodic driver and POST /api/run_pass; the lease is the real
         # single-run guard, so sharing one guard across both callers is safe.
         app.state.curator_clock = ClockGuard(settings.pass_interval_min * 60)
-        # open_tab's leases by (instance, tab_id) -> {since, until} (#72): navigate_tab
-        # carries a live one to the new url, and a reaped leased tab reads `tab_reaped`.
-        # Per process: a restart forgets them and both fall back to the old behaviour.
-        app.state.mcp_tab_leases = {}
 
         background_tasks: list[asyncio.Task] = []
         if not result.degraded:

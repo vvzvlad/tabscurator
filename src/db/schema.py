@@ -323,6 +323,25 @@ _V6_STATEMENTS: list[str] = [
     "ALTER TABLE instances DROP COLUMN allow_debugger",
 ]
 
+# --- Version 7: open_tab's lease remembered per TAB (#72) -------------------
+# ``open_tab {lease_ttl_s}`` writes an ``exemptions`` row keyed by URL; this table also
+# remembers WHICH tab got that lease, so ``navigate_tab`` can carry a live one to the new
+# url and a reaped leased tab reads ``tab_reaped``. It used to live in process memory, so
+# a service restart forgot it; here it survives one. ``leased_at`` is when open_tab took
+# the lease (a curator close before it belongs to an older tab with a reused id),
+# ``until`` the lease deadline. Pruned by retention on the ``actions`` horizon.
+_V7_STATEMENTS: list[str] = [
+    """
+    CREATE TABLE tab_leases (
+        instance_id TEXT NOT NULL,
+        tab_id INTEGER NOT NULL,
+        leased_at INTEGER NOT NULL,
+        until INTEGER NOT NULL,
+        PRIMARY KEY (instance_id, tab_id)
+    )
+    """,
+]
+
 # Ordered list of steps. Append new steps with the next target_version and bump
 # MAX_VERSION; never edit a shipped step (a migrated DB has already run it).
 STEPS: list[tuple[int, list[str]]] = [
@@ -332,6 +351,7 @@ STEPS: list[tuple[int, list[str]]] = [
     (4, _V4_STATEMENTS),
     (5, _V5_STATEMENTS),
     (6, _V6_STATEMENTS),
+    (7, _V7_STATEMENTS),
 ]
 
 MAX_VERSION: int = max(target for target, _ in STEPS)
