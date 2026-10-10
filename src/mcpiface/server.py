@@ -593,11 +593,16 @@ def build_mcp(app_ref) -> MCPServer:
         Plus ``count_start`` (count on entry), ``scrolled_px`` (0 = never moved), ``at_bottom``.
         A ``timeout_ms`` over the ceiling adds ``clamped: true`` + ``timeout_ms_effective``.
 
-        ``focus`` (default false) activates the tab and raises its window first. Reach for it
-        only when a background scroll stays flat: feeds built on IntersectionObserver do not
-        load in a tab that is not on screen, so their count never grows — but focusing TAKES
-        THE SCREEN from the human, which is why it is opt-in. ``timeout_ms`` defaults to
-        EXECUTE_JS_MAX_TIMEOUT_MS and is clamped to it."""
+        IF A BACKGROUND SCROLL STAYS FLAT: feeds built on IntersectionObserver (and virtualized
+        lists) do not load in a hidden tab, so their count never grows. FIRST call
+        ``set_focus_emulation(enabled=true)`` on the tab — it makes ``document.visibilityState``
+        ``visible`` and the screen stays with the human — then scroll again with ``focus`` off.
+        ``focus`` (default false) activates the tab and raises its window first; it TAKES THE
+        SCREEN from the human, so use it only if the emulation did not help (or the JS &
+        Debugger checkbox is off). A count that stays flat in a VISIBLE tab has another cause
+        that no visibility cures: the rest sits behind a collapsed block or a "show more"
+        button, which scrolling does not open — click it, then scroll. ``timeout_ms`` defaults
+        to EXECUTE_JS_MAX_TIMEOUT_MS and is clamped to it."""
         return await _guarded(tools.scroll_until(
             _host(), instance=instance, tab_id=tab_id, count_selector=count_selector,
             container_selector=container_selector, direction=direction,
@@ -667,8 +672,13 @@ def build_mcp(app_ref) -> MCPServer:
                                   expected_session: str | None = None) -> dict:
         """Toggle focus emulation on a tab via chrome.debugger; answers ``{ok, enabled}``.
 
-        Makes a BACKGROUND tab behave as focused — no timer throttling — WITHOUT taking the
-        screen from the human. The emulation HOLDS ONLY WHILE the debugger is attached, so
+        Makes a BACKGROUND tab behave as focused AND visible WITHOUT taking the screen from the
+        human: no timer throttling, ``document.hasFocus()`` is true and
+        ``document.visibilityState`` is ``visible`` — so IntersectionObserver feeds and
+        virtualized lists load in it (measured: a background avito messenger list went from
+        10 to 39 chats on enable alone, and ``scroll_until`` with ``focus`` off then reached
+        1316). This, not ``scroll_until(focus=true)``, is the first answer to a background feed
+        that will not load. The emulation HOLDS ONLY WHILE the debugger is attached, so
         ``enabled=true`` attaches the debugger and keeps it attached, and ``enabled=false``
         turns it off and detaches. While it is on, the browser shows its «идёт отладка» bar
         (and the attached state is detectable by anti-bot systems — the cost of the debugger
