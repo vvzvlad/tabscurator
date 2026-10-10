@@ -99,7 +99,8 @@ def build_mcp(app_ref) -> MCPServer:
     @mcp.tool()
     async def list_instances() -> dict:
         """List instances with a per-instance freshness envelope, stopped_at and
-        pending_plan (§11). Awaits a fresh snapshot per instance before answering."""
+        pending_plan (§11). Awaits a fresh snapshot per instance before answering.
+        ``execute_js_max_timeout_ms`` is the ceiling every verb's ``timeout_ms`` is clamped to."""
         return await _guarded(tools.list_instances(_host()))
 
     @mcp.tool()
@@ -250,6 +251,8 @@ def build_mcp(app_ref) -> MCPServer:
         WITH a wait the answer is ``wait_for``'s: ``{ok, matched, elapsed_ms}``. A wait that
         expires still answers ``ok`` with ``matched: false`` — the navigation WAS issued and
         the condition simply never became true, which is a verdict, not a failure.
+        A ``timeout_ms`` over the ceiling adds ``clamped: true`` + ``timeout_ms_effective``.
+        A tab ``open_tab`` leased keeps its live lease on the new url: ``lease: {ok, until}``.
 
         ``matched: false`` HAS TWO MEANINGS and your next move differs: either the condition
         never became true (the page is there, the selector is wrong or slower than
@@ -379,7 +382,7 @@ def build_mcp(app_ref) -> MCPServer:
 
         ``timeout_ms`` raises this one command's budget (clamped to
         EXECUTE_JS_MAX_TIMEOUT_MS) for code that legitimately takes longer than
-        CMD_TIMEOUT_MS.
+        CMD_TIMEOUT_MS. Over the ceiling the answer adds ``clamped: true`` + ``timeout_ms_effective``.
 
         The result is FLAT: ``value`` is the main frame's result. ``frames`` appears only
         when the injection genuinely produced more than one — its absence means one frame,
@@ -555,7 +558,8 @@ def build_mcp(app_ref) -> MCPServer:
         body text). Zero or several is ``invalid_args`` and nothing is polled.
 
         ``timeout_ms`` defaults to EXECUTE_JS_MAX_TIMEOUT_MS and is clamped to it. Like
-        get_text this injects a FIXED function, so no execute_js checkbox is needed."""
+        get_text this injects a FIXED function, so no execute_js checkbox is needed.
+        A ``timeout_ms`` over the ceiling adds ``clamped: true`` + ``timeout_ms_effective``."""
         return await _guarded(tools.wait_for(
             _host(), instance=instance, tab_id=tab_id, url_matches=url_matches,
             selector=selector, text_contains=text_contains, timeout_ms=timeout_ms,
@@ -585,6 +589,8 @@ def build_mcp(app_ref) -> MCPServer:
         Stops with ``stopped`` = ``"stable"`` (``stable_rounds`` steps with no growth, default
         3), ``"target"`` (``count >= target_count``), or ``"deadline"``. Answers ``{ok, count,
         rounds, stopped, elapsed_ms}``.
+        Plus ``count_start`` (count on entry), ``scrolled_px`` (0 = never moved), ``at_bottom``.
+        A ``timeout_ms`` over the ceiling adds ``clamped: true`` + ``timeout_ms_effective``.
 
         ``focus`` (default false) activates the tab and raises its window first. Reach for it
         only when a background scroll stays flat: feeds built on IntersectionObserver do not

@@ -196,6 +196,16 @@ def _clamp_timeout_ms(app, timeout_ms: int | None) -> int | None:
     return min(timeout_ms, app.state.settings.execute_js_max_timeout_ms)
 
 
+def _clamp_note(app, timeout_ms: int | None) -> dict:
+    """``{clamped, timeout_ms_effective}`` when ``timeout_ms`` exceeded the ceiling, else ``{}``
+    (#71): a silent clamp made ``matched: false`` unreadable — "not within what I asked" and
+    "not within what I was given" looked the same. Call after :func:`_clamp_timeout_ms`."""
+    cap = app.state.settings.execute_js_max_timeout_ms
+    if timeout_ms is not None and timeout_ms > cap:
+        return {"clamped": True, "timeout_ms_effective": cap}
+    return {}
+
+
 # How much longer the SOCKET budget is than the page-condition deadline of a waiting verb.
 # THIS ORDERING IS THE WHOLE POINT OF wait_for: the extension polls until its own deadline
 # and only then answers `timeout`, so if the service gave up at the same instant the
@@ -375,6 +385,8 @@ async def list_instances(app) -> dict:
         "stopped_at": stopped_at,
         "resume_pending": bool(resume_raw),
         "pending_plan": state_read._parse_pending_plan(resume_raw),
+        # The one ceiling every caller-named timeout_ms is clamped to (#71).
+        "execute_js_max_timeout_ms": app.state.settings.execute_js_max_timeout_ms,
         "instances": instances,
     }
 
@@ -627,7 +639,31 @@ async def _command(app, instance, command, params, *, auth_ctx, expected_session
             expected_session=expected_session,
         )
     except CommandError as exc:
+        if exc.code == protocol.ERR_NO_SUCH_TAB and await _reaped(app, instance, params.get("tabId")):
+            # Service-side only, like `extension_too_old`: the extension cannot know who
+            # closed the tab, so this is no §6 wire constant.
+            raise ToolError(
+                "tab_reaped",
+                f"tab {params['tabId']} was closed by the curator pass: its lease no longer "
+                "covered the tab's address (expired, or the tab left the leased url)",
+            )
         raise ToolError(exc.code, exc.message)
+
+
+async def _reaped(app, instance: str, tab_id) -> bool:
+    """Whether the curator pass closed this tab ``open_tab`` leased (#72) — the one
+    ``no_such_tab`` the agent could have prevented, told apart from "never existed" and
+    "a human closed it". ``since`` keeps a close of an older tab with a reused id out."""
+    held = app.state.mcp_tab_leases.get((instance, tab_id))
+    if held is None:
+        return False
+    row = await app.state.db.read(lambda c: c.execute(
+        "SELECT 1 FROM actions WHERE initiator = 'curator' AND instance_from = ? "
+        "AND tab_id = ? AND kind IN ('relocate_close', 'dedupe_close', 'singleton_close') "
+        "AND status IN ('done', 'pending') AND ts >= ? LIMIT 1",
+        (instance, tab_id, held["since"]),
+    ).fetchone())
+    return row is not None
 
 
 # --- #49 bulk plumbing -------------------------------------------------------
@@ -749,6 +785,11 @@ async def open_tab(app, *, instance: str, url: str, pinned: bool = False,
         # value is the same string the caller sent (that function checks, it does not
         # normalise), so what the tuple adds is the check having happened, not a transform.
         out["lease"] = await _write_open_lease(app, *lease_plan)
+        if out["lease"]["ok"]:
+            # Remembered per TAB (#72): navigate_tab carries it, and a reap reads tab_reaped.
+            app.state.mcp_tab_leases[(instance, result.get("tabId"))] = {
+                "since": _now_ms(), "until": lease_plan[2],
+            }
     return out
 
 
@@ -968,9 +1009,19 @@ async def execute_js(app, *, instance: str, tab_id: int, code: str,
     # older extension sees exactly the params it always saw.
     if await_promise:
         params["awaitPromise"] = True
-    result = await _command(app, instance, protocol.CMD_EXECUTE_JS, params, auth_ctx=auth_ctx,
-                            expected_session=expected_session, cmd_timeout_ms=budget)
-    return {"ok": True, **_flatten_injection_results(result.get("results"), max_bytes)}
+    try:
+        result = await _command(app, instance, protocol.CMD_EXECUTE_JS, params,
+                                auth_ctx=auth_ctx, expected_session=expected_session,
+                                cmd_timeout_ms=budget)
+    except ToolError as exc:
+        # The extension has no deadline of its own for execute_js: the clamped budget only
+        # surfaces as a socket `timeout`, so the note must ride the error too (#71).
+        note = _clamp_note(app, timeout_ms)
+        if note:
+            raise ToolError(exc.code, exc.message, {**exc.payload, **note}) from exc
+        raise
+    return {"ok": True, **_flatten_injection_results(result.get("results"), max_bytes),
+            **_clamp_note(app, timeout_ms)}
 
 
 async def execute_js_debugger(app, *, instance: str, tab_id: int, code: str,
@@ -1278,6 +1329,7 @@ async def wait_for(app, *, instance: str, tab_id: int, url_matches: str | None =
         "ok": True,
         "matched": bool(result.get("matched")),
         "elapsed_ms": int(result.get("elapsedMs") or 0),
+        **_clamp_note(app, timeout_ms),
     }
 
 
@@ -1346,6 +1398,12 @@ async def scroll_until(app, *, instance: str, tab_id: int, count_selector: str,
         "rounds": int(result.get("rounds") or 0),
         "stopped": result.get("stopped"),
         "elapsed_ms": int(result.get("elapsedMs") or 0),
+        # #74: "stable" alone cannot tell "grew, then ran out" from "never moved". Passed
+        # through as-is, so an extension that predates them answers null, not a made-up 0.
+        "count_start": result.get("countStart"),
+        "scrolled_px": result.get("scrolledPx"),
+        "at_bottom": result.get("atBottom"),
+        **_clamp_note(app, timeout_ms),
     }
 
 
@@ -1631,12 +1689,14 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
         budget = _wait_budget_ms(app, wait_ms)  # same ordering rule as wait_for
     result = await _command(app, instance, protocol.CMD_NAVIGATE_TAB, params, auth_ctx=auth_ctx,
                             expected_session=expected_session, cmd_timeout_ms=budget)
+    # Carried before the answer is judged: the tab HAS moved, even for an `extension_too_old`.
+    lease = await _carry_lease(app, instance, tab_id, url)
     if not waiting:
         # No wait asked for: the pre-wave answer, byte for byte. The extension's frame is a
         # bare {ok:true} here, and the reset path (§8) — `rules_api.perform_reset`, which
         # sends CMD_NAVIGATE_TAB itself rather than calling this verb — depends on the same
-        # shape at the layer below.
-        return {"ok": True, "result": result}
+        # shape at the layer below. A leased tab adds `lease` (#72), nothing else.
+        return {"ok": True, "result": result, **lease}
     if "matched" not in result:
         # AN OLD EXTENSION CANNOT SAY "NO", so we must not say it for it. `navigate_tab` is
         # an OLD command carrying a NEW parameter: a pre-wave bundle ignores `waitUntil` as
@@ -1675,6 +1735,8 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
         "ok": True,
         "matched": bool(result.get("matched")),
         "elapsed_ms": int(result.get("elapsedMs") or 0),
+        **_clamp_note(app, timeout_ms),
+        **lease,
     }
 
 
@@ -2429,6 +2491,19 @@ async def _write_open_lease(app, instance_id: str, url: str, until: int) -> dict
         return {"ok": True, "until": until, "reason": "mcp_lease"}
     except Exception as exc:  # noqa: BLE001 - a lease fault must not mask an open tab
         return {"ok": False, "error": "lease_write_failed", "message": str(exc)}
+
+
+async def _carry_lease(app, instance: str, tab_id: int, url: str) -> dict:
+    """``{"lease": ...}`` re-issuing the live lease ``open_tab`` took on this tab for the url
+    ``navigate_tab`` just sent it to, with the SAME deadline (#72); ``{}`` when it holds none.
+
+    The pass matches a lease against the tab's LIVE url, so the agent's own navigation
+    dropped it as silently as a redirect does. The url already passed the extension's
+    http/https edge guard — the rule ``_validate_url`` applies — or the navigate failed."""
+    held = app.state.mcp_tab_leases.get((instance, tab_id))
+    if held is None or held["until"] <= _now_ms():
+        return {}
+    return {"lease": await _write_open_lease(app, instance, url, held["until"])}
 
 
 # --- pass + stop/start -------------------------------------------------------

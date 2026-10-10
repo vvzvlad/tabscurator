@@ -475,8 +475,19 @@ export function rectInWorld(selector) {
 // the scroll_until loop reads a thrown injection as a frame being torn down and would poll
 // to the deadline, turning a typo into a full budget spent on the wrong question. A
 // `containerSelector` that matched nothing is `{noContainer}`, distinct from a bad selector.
+//
+// It also answers `top` / `atBottom` (#74): where the scroller stood BEFORE this step moved
+// it, i.e. the settled result of the previous step plus whatever loaded since — a read right
+// after the assignment would see a smooth-scrolling page that has not moved yet.
 export function scrollAndCountInWorld(containerSelector, direction, countSelector) {
   const up = direction === "up";
+  let top = 0;
+  let atBottom = false;
+  const measure = (el) => {
+    top = el.scrollTop;
+    // 1px slack: a zoomed page reports fractional positions.
+    atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+  };
   if (containerSelector) {
     let scroller;
     try {
@@ -488,6 +499,7 @@ export function scrollAndCountInWorld(containerSelector, direction, countSelecto
       throw e;
     }
     if (!scroller) return { noContainer: true };
+    measure(scroller);
     // up => history/chat feeds load OLDER items by pulling to the top; down => the ordinary
     // infinite feed grows off the bottom.
     scroller.scrollTop = up ? 0 : scroller.scrollHeight;
@@ -496,6 +508,7 @@ export function scrollAndCountInWorld(containerSelector, direction, countSelecto
     // `window.scrollTo` is the same move on the window, and doing both covers pages where
     // one path is a quirks-mode no-op.
     const doc = document.scrollingElement || document.documentElement;
+    if (doc) measure(doc);
     const target = up ? 0 : doc ? doc.scrollHeight : 0;
     if (doc) doc.scrollTop = target;
     if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
@@ -511,7 +524,7 @@ export function scrollAndCountInWorld(containerSelector, direction, countSelecto
     }
     throw e;
   }
-  return { count };
+  return { count, top, atBottom };
 }
 
 // The body injected by start_js. THIS is the arbitrary-code path (§12): `source` is the
@@ -1604,7 +1617,8 @@ async function waitFor(params, nowFn, sleep) {
 }
 
 // scroll_until {tabId, countSelector, containerSelector?, direction?, targetCount?,
-// stableRounds?, intervalMs?, timeoutMs, focus?} -> {count, rounds, stopped, elapsedMs}.
+// stableRounds?, intervalMs?, timeoutMs, focus?} -> {count, rounds, stopped, elapsedMs,
+// countStart, scrolledPx, atBottom}.
 //
 // FIXED-function (see scrollAndCountInWorld): NOT behind the execute_js checkbox, writes no
 // js_audit row. The scheduler lives HERE in the worker — each step is a fresh
@@ -1665,6 +1679,11 @@ async function scrollUntil(params, nowFn, sleep) {
   let rounds = 0;
   let stable = 0;
   let stopped = "deadline";
+  // #74: what tells "grew, then ran out" from "never moved" behind the same `stable`.
+  let countStart = 0;
+  let scrolledPx = 0;
+  let lastTop = null;
+  let atBottom = false;
   for (;;) {
     let live;
     try {
@@ -1707,6 +1726,12 @@ async function scrollUntil(params, nowFn, sleep) {
       );
     }
     const newCount = Number.isInteger(got.count) ? got.count : 0;
+    // The first step counts in the same synchronous run as its scroll, before any page code
+    // can react and load more — so its count is the count on entry.
+    if (rounds === 0) countStart = newCount;
+    if (lastTop !== null) scrolledPx += Math.abs(got.top - lastTop);
+    lastTop = got.top;
+    atBottom = !!got.atBottom;
     rounds += 1;
     // Growth resets the stability counter; a step that did not grow increments it.
     if (newCount > count) stable = 0;
@@ -1728,7 +1753,10 @@ async function scrollUntil(params, nowFn, sleep) {
     }
     await sleep(Math.min(intervalMs, remaining));
   }
-  return ok({ count, rounds, stopped, elapsedMs: nowFn() - started });
+  return ok({
+    count, rounds, stopped, elapsedMs: nowFn() - started,
+    countStart, scrolledPx: Math.round(scrolledPx), atBottom,
+  });
 }
 
 // start_js {tabId, code, world?, jobId} -> {jobId}. ARBITRARY code, so gated on the

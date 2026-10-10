@@ -3304,20 +3304,25 @@ function scrollFakeDoc({ containers = {}, counts = {}, bad = [], scrollingElemen
 
 describe("scrollAndCountInWorld — scroll_until's injected body", () => {
   it("scrolls a CONTAINER to the far end for the direction and counts the selector", () => {
-    const scroller = { scrollHeight: 4000, scrollTop: 0 };
+    const scroller = { scrollHeight: 4000, scrollTop: 0, clientHeight: 1000 };
     withDocument(
       scrollFakeDoc({ containers: { "#feed": scroller }, counts: { ".m": [0, 0, 0] } }),
       () => {
-        expect(scrollAndCountInWorld("#feed", "down", ".m")).toEqual({ count: 3 });
+        // top/atBottom (#74) are where it stood BEFORE this step moved it.
+        expect(scrollAndCountInWorld("#feed", "down", ".m")).toEqual({
+          count: 3, top: 0, atBottom: false,
+        });
         expect(scroller.scrollTop).toBe(4000); // down => scrollHeight
       },
     );
   });
 
   it("direction 'up' pulls the container to the top (chat/history backlog)", () => {
-    const scroller = { scrollHeight: 4000, scrollTop: 4000 };
+    const scroller = { scrollHeight: 4000, scrollTop: 4000, clientHeight: 0 };
     withDocument(scrollFakeDoc({ containers: { "#feed": scroller }, counts: { ".m": [1] } }), () => {
-      expect(scrollAndCountInWorld("#feed", "up", ".m")).toEqual({ count: 1 });
+      expect(scrollAndCountInWorld("#feed", "up", ".m")).toEqual({
+        count: 1, top: 4000, atBottom: true,
+      });
       expect(scroller.scrollTop).toBe(0);
     });
   });
@@ -3328,7 +3333,9 @@ describe("scrollAndCountInWorld — scroll_until's injected body", () => {
     globalThis.window = { scrollTo };
     try {
       withDocument(scrollFakeDoc({ scrollingElement: doc, counts: { ".m": [1, 2] } }), () => {
-        expect(scrollAndCountInWorld(null, "down", ".m")).toEqual({ count: 2 });
+        expect(scrollAndCountInWorld(null, "down", ".m")).toEqual({
+          count: 2, top: 0, atBottom: false,
+        });
         expect(doc.scrollTop).toBe(9000);
         expect(scrollTo).toHaveBeenCalledWith(0, 9000);
       });
@@ -3365,7 +3372,7 @@ describe("scrollAndCountInWorld — scroll_until's injected body", () => {
 describe("scroll_until dispatch", () => {
   it("stops with 'stable' after stableRounds steps of no growth, reporting rounds/elapsed", async () => {
     chromeWithOneTab();
-    chrome.__state.scriptResults = [{ result: { count: 5 } }];
+    chrome.__state.scriptResults = [{ result: { count: 5, top: 0, atBottom: true } }];
     const c = fakeClock();
     const res = await dispatchCommand(
       frame(CMD_SCROLL_UNTIL, {
@@ -3375,8 +3382,33 @@ describe("scroll_until dispatch", () => {
       ctx({ now: c.now, sleep: c.sleep }),
     );
     expect(res.ok).toBe(true);
-    // grew to 5 on round 1, then 3 flat rounds => 4 rounds total, stop 'stable'.
-    expect(res.result).toEqual({ count: 5, rounds: 4, stopped: "stable", elapsedMs: 300 });
+    // grew to 5 on round 1, then 3 flat rounds => 4 rounds total, stop 'stable'. It never
+    // moved (#74): scrolledPx 0, and the 5 was already there on entry.
+    expect(res.result).toEqual({
+      count: 5, rounds: 4, stopped: "stable", elapsedMs: 300,
+      countStart: 5, scrolledPx: 0, atBottom: true,
+    });
+  });
+
+  it("a feed that grew, then ran out, reports where it started and how far it moved (#74)", async () => {
+    chromeWithOneTab();
+    const step = (count, top, atBottom = false) => [{ result: { count, top, atBottom } }];
+    chrome.__state.scriptResults = step(10, 0);
+    const c = fakeClock();
+    c.onSleep((n) => {
+      chrome.__state.scriptResults =
+        n === 1 ? step(20, 3000) : n === 2 ? step(30, 6000) : step(30, 9000, true);
+    });
+    const res = await dispatchCommand(
+      frame(CMD_SCROLL_UNTIL, {
+        tabId: 5, countSelector: ".m", stableRounds: 2, intervalMs: 100, timeoutMs: 60000,
+      }),
+      ctx({ now: c.now, sleep: c.sleep }),
+    );
+    expect(res.result).toEqual({
+      count: 30, rounds: 5, stopped: "stable", elapsedMs: 400,
+      countStart: 10, scrolledPx: 9000, atBottom: true,
+    });
   });
 
   it("stops with 'target' as soon as count reaches targetCount", async () => {
@@ -3387,7 +3419,10 @@ describe("scroll_until dispatch", () => {
       frame(CMD_SCROLL_UNTIL, { tabId: 5, countSelector: ".m", targetCount: 8, timeoutMs: 60000 }),
       ctx({ now: c.now, sleep: c.sleep }),
     );
-    expect(res.result).toEqual({ count: 12, rounds: 1, stopped: "target", elapsedMs: 0 });
+    expect(res.result).toEqual({
+      count: 12, rounds: 1, stopped: "target", elapsedMs: 0,
+      countStart: 12, scrolledPx: 0, atBottom: false,
+    });
   });
 
   it("runs with the execute_js checkbox OFF (fixed function, §12)", async () => {
