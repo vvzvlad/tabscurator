@@ -45,8 +45,7 @@ export function hostOf(url) {
 // NEVER answers "" while there is a url: a row is a LINK, and a link with no text is
 // an invisible click target. Plenty of real urls have no host at all — file:///…,
 // about:blank, chrome://newtab, data: — so "fall back to the host" is not a complete
-// answer; the url itself is the last resort (this is what the old
-// `{{ t.title || t.url }}` template did, and losing it drew blank rows).
+// answer; the url itself is the last resort.
 //
 // `knownHost` lets a caller that ALREADY parsed the url pass the host in instead of
 // paying for a second `new URL` per row — the startpage's row views do exactly that

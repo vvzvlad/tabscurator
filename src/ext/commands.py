@@ -118,7 +118,7 @@ async def send_command(
     :class:`CommandError` carrying the §6 code on ``ok:false``, on timeout, or when
     there is no live socket.
 
-    ``expected_session`` (#47 "session epoch") pins the frame to a session the caller
+    ``expected_session`` ("session epoch") pins the frame to a session the caller
     read EARLIER: when given, it is STAMPED as ``sessionId`` in place of the live
     ``conn_state.session_id``. The service never compares — it only stamps — and the
     extension's own live check (incoming ``sessionId`` vs its current session →
@@ -127,11 +127,10 @@ async def send_command(
     is race-free where a pre-send comparison would be TOCTOU: there are ``await`` points
     between reading the session and putting the frame on the socket (revoke check, the
     execute_js audit), and a reconnect in that window would re-stamp the NEW
-    live session and defeat a comparison. ``None`` = today's behavior (stamp the live
-    session); the param is deliberately OPTIONAL — a caller may go unprotected. (An
-    instance whose envelope ``session_id`` is ``null`` — no clean hello yet — echoes
-    back as ``None`` and is thus fail-open: it cannot be stale-protected until it has a
-    real session. Inherent, not a bug.)
+    live session and defeat a comparison. ``None`` = stamp the live session; the param
+    is OPTIONAL — a caller may go unprotected. (An instance whose envelope
+    ``session_id`` is ``null`` — no clean hello yet — echoes back as ``None`` and is
+    thus fail-open until it has a real session.)
 
     For an audited verb (``_AUDITED_COMMANDS`` — the arbitrary-code pair plus the
     data-bearing ``start_ws_capture``) a ``js_audit`` row is written BEFORE the send (so
@@ -145,13 +144,12 @@ async def send_command(
             protocol.ERR_NO_CONNECTION, f"no live connection to instance {instance_id}"
         )
 
-    # §5 revoke safety net (issue #35): a command must not reach a REVOKED instance even
-    # if the best-effort socket close after revoke lost the race to this send. When a DB
-    # is available, a non-active target fails EXACTLY like a dead connection — the hello
-    # ``status='active'`` guard (slice B) blocks re-enrollment, and this blocks in-flight
-    # commands. A target with NO row at all is left to the registry/connection checks (a
-    # live socket implies an approved row in production; the id-only test rigs carry no row
-    # and keep behaving as before). Read-only, OUTSIDE any transaction, before the frame or
+    # §5 revoke safety net: a command must not reach a REVOKED instance even if the
+    # best-effort socket close after revoke lost the race to this send. When a DB is
+    # available, a non-active target fails EXACTLY like a dead connection — the hello
+    # ``status='active'`` guard blocks re-enrollment, and this blocks in-flight commands.
+    # A target with NO row at all is left to the registry/connection checks (a live socket
+    # implies an approved row in production; the id-only test rigs carry no row). Read-only, OUTSIDE any transaction, before the frame or
     # the execute_js audit — so a revoked target is refused with no side effect, like
     # ``no_connection``.
     if db is not None:
@@ -167,9 +165,9 @@ async def send_command(
         "type": protocol.TYPE_COMMAND,
         "id": request_id,
         # STAMP the session so a stale/foreign session is rejected by the extension (§5).
-        # When the caller pinned an ``expected_session`` (#47) stamp THAT — an epoch it
+        # When the caller pinned an ``expected_session`` stamp THAT — an epoch it
         # read earlier — so a browser restart in between makes the extension refuse
-        # (``stale_session``); otherwise stamp the CURRENT live session, as before.
+        # (``stale_session``); otherwise stamp the CURRENT live session.
         "sessionId": expected_session if expected_session is not None else conn_state.session_id,
         "command": command,
         "params": params,
@@ -177,8 +175,8 @@ async def send_command(
 
     # GUARDRAIL — the ``_AUDITED_COMMANDS`` tuple below (used at BOTH the db-None fail-closed
     # check and the audit-before-send check) is the ALLOWLIST of verbs that carry arbitrary code
-    # OR ship page data out, and therefore MUST write a ``js_audit`` row before the send. There
-    # are FOUR now: ``execute_js`` / ``execute_js_debugger`` / ``start_js`` (arbitrary caller code)
+    # OR ship page data out, and therefore MUST write a ``js_audit`` row before the send:
+    # ``execute_js`` / ``execute_js_debugger`` / ``start_js`` (arbitrary caller code)
     # and ``start_ws_capture`` (data-bearing — it opens a durable read channel onto a tab's
     # WebSocket traffic, i.e. a messenger's conversation). ``execute_js_debugger`` is the CSP-bypass
     # twin of ``execute_js`` — it runs the SAME arbitrary code via a chrome.debugger Runtime.evaluate

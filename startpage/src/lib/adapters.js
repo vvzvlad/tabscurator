@@ -48,7 +48,7 @@ export async function queryOwnTabs(chromeApi) {
 // empty. The page must never go blank over an absent optional capability.
 //
 // TODO: bound the list on a large profile (virtualise or cap + "показать все"). A
-// profile with thousands of bookmarks renders every leaf into the DOM today.
+// profile with thousands of bookmarks renders every leaf into the DOM.
 // TODO: render the folder HIERARCHY (nested paths / indentation). The tree is flattened
 // to one section per parent folder, so two same-named folders in different branches are
 // indistinguishable.

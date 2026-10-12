@@ -27,14 +27,10 @@ COPY main.py .
 # denied" if the bit is lost in the build context (Windows checkout, tar copy).
 COPY --chmod=0755 entrypoint.sh /entrypoint.sh
 
-# Build identity: WHICH revision this image contains. There is no git and no repository
-# inside the container, so this is the only moment it can be established — CI passes
-# `--build-arg BUILD_REVISION=${{ github.sha }}` (.github/workflows/ghcr-check-publish.yml)
-# and the ENV bakes it in for the running process to report on /healthz and /admin.
-# Declared LAST on purpose: the value changes on every commit, and anything below an ARG
-# that changes is a cache miss — here there is nothing below it but metadata.
-# The `unknown` default keeps a plain `docker build .` working; src/settings.py turns both
-# an unset and an empty value into the same honest "unknown".
+# Build identity: CI passes `--build-arg BUILD_REVISION=<sha>`
+# (.gitea/workflows/image-check-publish.yml), reported on /healthz and /admin.
+# Declared last because it changes on every commit and busts the cache below it.
+# The `unknown` default keeps a plain `docker build .` working.
 ARG BUILD_REVISION=unknown
 ENV BUILD_REVISION=${BUILD_REVISION}
 # The standard OCI label, so `docker inspect` / `docker image ls --format` answer the same

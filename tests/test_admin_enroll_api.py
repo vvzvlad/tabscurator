@@ -1,19 +1,15 @@
-"""``/admin/*`` — the operator control surface that is LEFT after enrolment lost its
-second step (§6, §13).
+"""``/admin/*`` — the operator control surface (§6, §13).
 
-What this file no longer covers, and why: there is no ``/admin/enroll/approve``,
-``/admin/enroll/reject`` or ``/admin/enroll/requests``. A browser enrols itself over /ext
-by presenting a valid window code and the id it wants, so there is no pending row to list,
-approve or reject, and no TTL to sweep. Those frames are tested in
-``tests/test_ext_channel.py`` and the SQL that writes them in ``tests/test_revoke.py``
-(``enroll_instance``).
+A browser enrols itself over /ext by presenting a valid window code and the id it wants;
+those frames are tested in ``tests/test_ext_channel.py`` and the SQL that writes them in
+``tests/test_revoke.py`` (``enroll_instance``).
 
-What remains here:
+Covered here:
 
 * (6)  every /admin endpoint rejects an INSTANCE secret with 401; ADMIN_TOKEN → 200.
 * (9)  revoking MAIN without a matching replacement → 409; with ``replacement==MAIN`` →
        200 — and the id it frees can be taken again (the restore path, asserted at the
-       query layer since the operator no longer performs it).
+       query layer since no operator action performs it).
 * the enrollment window: arm → read (with the live code) → close, each audited.
 * degraded gating: mutating verbs 503, reads still available.
 * the instances list: all statuses, and a revoked row never reads as connected.
@@ -142,9 +138,7 @@ def test_list_instances_names_the_configured_main(tmp_path):
 
     MAIN is service configuration (``MAIN_INSTANCE_ID``), not a column: nothing in a row
     distinguishes it, so a client reading this endpoint could not mark the MAIN row nor warn
-    about a MAIN revoke BEFORE sending it — its only way to discover the fact was to fire
-    the revoke and read the 409 back, i.e. to find out by doing the thing it was meant to
-    warn about. Reddens if the key is dropped from the body, or if it is derived from the
+    about a MAIN revoke BEFORE sending it. Reddens if the key is dropped from the body, or if it is derived from the
     rows (the second half below: a configured MAIN that has not enrolled yet — the state
     every fresh deployment starts in — still has to be named).
     """
@@ -173,8 +167,7 @@ def test_window_read_reports_the_configured_length(tmp_path):
     ``seconds_remaining`` is 0 while closed and there is no deadline to subtract from, so
     the configured length is not derivable from this body — yet it is exactly what the
     console's "Открыть регистрацию на N минут" button has to name. Reddens if
-    ``window_minutes`` is dropped or stops following ENROLL_WINDOW_MIN (the button would go
-    back to a hard-coded 10 and lie on any deployment that set the variable).
+    ``window_minutes`` is dropped or stops following ENROLL_WINDOW_MIN.
     """
     app = create_app_for(tmp_path, enroll_window_min=25)
     with TestClient(app) as client:
@@ -206,12 +199,12 @@ def test_list_instances_shows_all_statuses_and_no_title(tmp_path):
 
 # --- (9) revoke MAIN round-trip + the restore path ---------------------------
 def test_revoke_main_409_without_replacement_then_the_id_can_be_retaken(tmp_path):
-    """Acc 9: revoking MAIN without ``replacement==MAIN`` → 409; WITH it → 200.
+    """Revoking MAIN without ``replacement==MAIN`` → 409; WITH it → 200.
 
     Then the RESTORE: the freed id is taken again by an enrolment, which is the only way
     back for a revoked MAIN (migration 2 leaves every pre-enrolment row revoked). That
-    half is asserted at the query layer because no operator action performs it anymore —
-    the browser re-enrols itself through /ext. Reddens if ``RevokeMainRefused`` stops
+    half is asserted at the query layer because no operator action performs it — the
+    browser re-enrols itself through /ext. Reddens if ``RevokeMainRefused`` stops
     mapping to 409, or if ``enroll_instance``'s reactivation (``WHERE status!='active'``)
     breaks — the revoked MAIN could then never come back.
     """
@@ -294,9 +287,8 @@ def test_window_open_read_close_and_audit(tmp_path):
     audit rows are written. Reddens if the code is not returned while open, or the audit
     is dropped.
 
-    The window carries MORE weight than it used to: it is now the WHOLE permission to
-    enrol, not merely the interval an approval had to fall inside. Arming it is therefore
-    the operator's one deliberate act, and `window_open` is the audit row that records it.
+    The window is the WHOLE permission to enrol, so arming it is the operator's one
+    deliberate act, and `window_open` is the audit row that records it.
     """
     app = create_app_for(tmp_path, enroll_window_min=10)
     db_path = str(tmp_path / "curator.db")

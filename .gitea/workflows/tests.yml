@@ -1,18 +1,10 @@
 name: Tests
 
-# Split out from image-check-publish.yml on purpose: that workflow must never
-# run on pull_request, because a PR build would push the `:develop` tag prod
-# deploys from and watchtower on the production host would pick it up within
-# seconds. Tests alone are safe here and are what a PR actually needs — without
-# this workflow a broken test only surfaces after the merge into develop.
-#
-# `develop` is this repository's default branch and the only long-lived one:
-# there is no `main` yet (it is reserved for releases), so a PR here targets
-# `develop`, not `main`.
+# PR tests live apart from image-check-publish.yml, which must never run on
+# pull_request: a PR build would push the `:develop` tag production deploys from.
+# `develop` is the default branch (`main` is reserved for releases).
 on:
-  # Manual re-run: without it a run that flaked on runner networking could only be
-  # retried by pushing an empty commit to the PR branch. Safe to expose here — this
-  # workflow touches no registry and no secrets, it only runs the test suites.
+  # Manual re-run; safe because this workflow touches no registry and no secrets.
   workflow_dispatch:
   pull_request:
     branches: [ "develop" ]
@@ -49,12 +41,8 @@ jobs:
         ADMIN_TOKEN: test-admin-token       # required + must differ from METRICS_TOKEN (§13)
       run: pytest --tb=short -q
 
-    # The alert rules (§12) live in this job, not a job of their own, so `build:
-    # needs: test` keeps gating the image on them as well: a rule file that no longer
-    # parses leaves the deployed curator with NO alerts at all, which is a worse state
-    # to ship than a failed build. promtool is not a Python dep and cannot come from
-    # requirements-dev.txt, so it is fetched here — pinned to the Prometheus LTS line,
-    # because an unpinned "latest" makes the meaning of a green run drift.
+    # The alert rules (§12) are validated in the test job. promtool is not a Python
+    # dep, so it is fetched here, pinned to the Prometheus LTS line.
     - name: Install promtool
       env:
         PROMETHEUS_VERSION: "3.5.5"   # LTS
@@ -66,13 +54,9 @@ jobs:
         "$HOME/.local/bin/promtool" --version
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-    # Through `make alerts`, never a hand-copied promtool line: the target IS the
-    # definition of "validated" (schema check + the fire/stay-quiet cases in
-    # deploy/alerts_test.yml), and a duplicate here would drift from what an operator
-    # runs locally. CI=true flips the target's "promtool missing -> skip and exit 0"
-    # branch into a hard failure, so a runner that failed to fetch the binary cannot
-    # report a skip as a pass. (GitHub already exports CI=true; set explicitly so the
-    # dependency is visible rather than inherited.)
+    # `make alerts` is the single definition of "validated" (schema check + the cases
+    # in deploy/alerts_test.yml). CI=true turns its "promtool missing -> skip" branch
+    # into a hard failure.
     - name: Validate the Prometheus alert rules
       env:
         CI: "true"
@@ -118,20 +102,10 @@ jobs:
         npm run gates
         npm test
 
-    # The build writes into the TRACKED extension/startpage. A fresh build must match
-    # what is committed — otherwise editing startpage/src/* without rebuilding ships a
-    # stale newtab and no gate above catches it (the gates run over whatever was built,
-    # not over the committed artifact). The Vite build is byte-reproducible on the
-    # pinned toolchain (verified), so comparing the tree against HEAD is the gate; a
-    # drift means "run `npm --prefix startpage run build` and commit the result".
-    #
-    # `git status --porcelain`, NOT `git diff --exit-code`: THE CHUNK FILENAME CARRIES A
-    # CONTENT HASH (assets/index-<hash>.js), so a changed bundle is never a modification
-    # of a tracked file — it is a DELETED old chunk plus a brand new UNTRACKED one. `git
-    # diff` does not look at untracked files at all, so it would report the new chunk as
-    # nothing and pass; a forgotten `git add` would then ship an index.html pointing at a
-    # chunk that is not in the repo — an empty newtab on a green CI run. Do not
-    # "simplify" this back to git diff.
+    # The build writes into the tracked extension/startpage, and the Vite build is
+    # byte-reproducible, so any difference from HEAD means the committed bundle is stale.
+    # `git status --porcelain`, not `git diff`: the chunk filename carries a content
+    # hash, so a changed bundle shows up as a new untracked file that `git diff` ignores.
     - name: Fail if the committed startpage bundle is stale (drift from a fresh build)
       run: |
         if [ -n "$(git status --porcelain -- extension/startpage)" ]; then

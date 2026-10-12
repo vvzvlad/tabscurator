@@ -15,14 +15,8 @@ on:
 permissions:
   contents: read   # checkout
 
-# Two pushes to the same branch in a row must not race: the runs are independent
-# and the older one may finish last, leaving its `:develop` on the registry — a
-# watchtower deploy would then ship the previous commit to prod.
-# The group alone already fixes that: runs are serialised, so the newest commit's
-# tag is written last. Cancelling is deliberately OFF — it would kill the older
-# run together with its image, and on two quick pushes the intermediate commit
-# would never be built, leaving holes in the tag history exactly where a rollback
-# is most likely to be needed.
+# Runs on one branch are serialised so the newest commit's tag is written last.
+# No cancelling: every commit gets built, so each one stays a rollback point.
 concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: false
@@ -47,12 +41,8 @@ jobs:
         ADMIN_TOKEN: test-admin-token       # required + must differ from METRICS_TOKEN (§13)
       run: pytest --tb=short -q
 
-    # The alert rules (§12) live in this job, not a job of their own, so `build:
-    # needs: test` keeps gating the image on them as well: a rule file that no longer
-    # parses leaves the deployed curator with NO alerts at all, which is a worse state
-    # to ship than a failed build. promtool is not a Python dep and cannot come from
-    # requirements-dev.txt, so it is fetched here — pinned to the Prometheus LTS line,
-    # because an unpinned "latest" makes the meaning of a green run drift.
+    # The alert rules (§12) are validated in the test job. promtool is not a Python
+    # dep, so it is fetched here, pinned to the Prometheus LTS line.
     - name: Install promtool
       env:
         PROMETHEUS_VERSION: "3.5.5"   # LTS
@@ -64,13 +54,9 @@ jobs:
         "$HOME/.local/bin/promtool" --version
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-    # Through `make alerts`, never a hand-copied promtool line: the target IS the
-    # definition of "validated" (schema check + the fire/stay-quiet cases in
-    # deploy/alerts_test.yml), and a duplicate here would drift from what an operator
-    # runs locally. CI=true flips the target's "promtool missing -> skip and exit 0"
-    # branch into a hard failure, so a runner that failed to fetch the binary cannot
-    # report a skip as a pass. (GitHub already exports CI=true; set explicitly so the
-    # dependency is visible rather than inherited.)
+    # `make alerts` is the single definition of "validated" (schema check + the cases
+    # in deploy/alerts_test.yml). CI=true turns its "promtool missing -> skip" branch
+    # into a hard failure.
     - name: Validate the Prometheus alert rules
       env:
         CI: "true"
@@ -118,20 +104,10 @@ jobs:
         npm run gates
         npm test
 
-    # The build writes into the TRACKED extension/startpage. A fresh build must match
-    # what is committed — otherwise editing startpage/src/* without rebuilding ships a
-    # stale newtab and no gate above catches it (the gates run over whatever was built,
-    # not over the committed artifact). The Vite build is byte-reproducible on the
-    # pinned toolchain (verified), so comparing the tree against HEAD is the gate; a
-    # drift means "run `npm --prefix startpage run build` and commit the result".
-    #
-    # `git status --porcelain`, NOT `git diff --exit-code`: THE CHUNK FILENAME CARRIES A
-    # CONTENT HASH (assets/index-<hash>.js), so a changed bundle is never a modification
-    # of a tracked file — it is a DELETED old chunk plus a brand new UNTRACKED one. `git
-    # diff` does not look at untracked files at all, so it would report the new chunk as
-    # nothing and pass; a forgotten `git add` would then ship an index.html pointing at a
-    # chunk that is not in the repo — an empty newtab on a green CI run. Do not
-    # "simplify" this back to git diff.
+    # The build writes into the tracked extension/startpage, and the Vite build is
+    # byte-reproducible, so any difference from HEAD means the committed bundle is stale.
+    # `git status --porcelain`, not `git diff`: the chunk filename carries a content
+    # hash, so a changed bundle shows up as a new untracked file that `git diff` ignores.
     - name: Fail if the committed startpage bundle is stale (drift from a fresh build)
       run: |
         if [ -n "$(git status --porcelain -- extension/startpage)" ]; then
@@ -148,11 +124,9 @@ jobs:
 
     - name: Compute image tags
       id: tags
-      # develop -> :develop, and that is the tag watchtower deploys in production today.
-      # main -> :latest + :<sha> is reserved for releases; the branch does not exist yet.
-      # ANY OTHER branch gets its own :<branch> tag. It used to fall through to :develop,
-      # which meant a build off a side branch silently overwrote the tag production
-      # deploys from — a one-character typo away from shipping unreviewed code.
+      # develop -> :develop, the tag watchtower deploys in production.
+      # main -> :latest + :<sha>, reserved for releases.
+      # Any other branch gets its own :<branch> tag, never :develop.
       env:
         # Passed through the environment instead of being interpolated into the
         # script text: git allows `$`, backticks, quotes and parentheses in branch
@@ -165,83 +139,43 @@ jobs:
         # accept them in an image path — a repo like `TabsCurator` would fail the
         # build with `invalid reference format`, so lowercase it here.
         IMAGE="gitea.vvzvlad.xyz/$(printf '%s' "$REPO" | tr 'A-Z' 'a-z')"
-        # ⚠️ DO NOT "FIX" THIS TO `develop`, EVEN THOUGH `develop` IS THIS REPO'S
-        # DEFAULT (AND ONLY) BRANCH — IT WOULD BREAK PRODUCTION.
-        # Everywhere else in the fleet the default branch is `main` and this check
-        # selects the production tag, so the obvious-looking correction here is to
-        # swap in `develop`. Do not. Production pulls
-        # `gitea.vvzvlad.xyz/projects/tabscurator:develop`, and that tag is produced
-        # by the ELSE branch below, where the sanitiser turns the branch name
-        # `develop` into the tag `develop`. Changing the condition would send
-        # `develop` down the `main` path instead, publishing `:latest` + `:<sha>` and
-        # never touching `:develop` again — watchtower would find nothing new and the
-        # container would sit frozen on today's image with a fully green CI.
-        # `main` stays here because it is the RELEASE branch (reserved, not yet
-        # created); when it is finally cut, it will correctly publish :latest + :<sha>.
+        # Do not change this to `develop`: production pulls
+        # `gitea.vvzvlad.xyz/projects/tabscurator:develop`, which the ELSE branch below
+        # produces from the branch name. `main` is the reserved release branch.
         if [ "$REF_NAME" = "main" ]; then
-          # Tag ORDER matters and must not be "tidied up": the push step iterates
-          # over $TAGS left to right, so :latest is pushed LAST and acts as the
-          # commit of the whole publication. If :<sha> fails to push (network,
-          # registry quota, disk), the run stops before :latest moves and prod
-          # keeps running the previous image. The reverse order would publish a
-          # :latest that watchtower deploys within seconds while its immutable
-          # :<sha> twin — the only rollback point — never made it to the registry.
+          # Order matters: the push step goes left to right, so :latest moves only
+          # after the immutable :<sha> rollback point is in the registry.
           echo "tags=$IMAGE:$SHA $IMAGE:latest" >> "$GITHUB_OUTPUT"
         else
-          # Sanitise the branch name into a legal docker tag: everything outside
-          # [A-Za-z0-9_.-] (a `/` in feat/foo above all) becomes `-`, and the result
-          # is cut to 100 chars — branch names have no length limit, docker rejects
-          # tags over 128.
-          # The `sed` fixes the first character: docker requires a tag to match
-          # [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}, so a branch like `-fix`, `(test)`
-          # or `+wip` would otherwise produce a leading `-` and fail the build
-          # with `invalid reference format`.
-          # `develop` consists only of legal characters, so it passes through
-          # untouched — this is exactly how the production tag is produced.
+          # Sanitise into a legal docker tag ([a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}):
+          # illegal characters become `-`, a bad first character becomes `_`, and the
+          # result is cut to 100 chars. `develop` passes through unchanged.
           branch_tag=$(printf '%s' "$REF_NAME" | tr -c 'A-Za-z0-9_.-' '-' | sed 's/^[^A-Za-z0-9_]/_/' | cut -c1-100)
-          # The sanitiser passes a name through untouched when it already consists
-          # of legal characters, so a branch literally named `latest` would come
-          # out as the release tag and — one manual workflow_dispatch later — ship
-          # unreviewed code as a release. The `main` check above does not cover
-          # this: the branch is not `main`, it only borrows its tag.
-          # Reserved names are therefore prefixed instead of being used as-is.
+          # A branch named `latest` must not publish the release tag.
           if [ "$branch_tag" = "latest" ]; then
             branch_tag="branch-latest"
           fi
           echo "tags=$IMAGE:${branch_tag}" >> "$GITHUB_OUTPUT"
         fi
 
-    # BUILD_REVISION is the ONE thing the deployed container cannot work out for itself
-    # (no git, no repo inside the image), so it is stamped here, from the commit this run
-    # is building. The image then reports it on /healthz and in the /admin console, which
-    # is what makes "the code is broken" distinguishable from "watchtower has not pulled
-    # the new image yet" — the two failures look identical otherwise. The `:develop` tag is
-    # reused on every push, so the tag itself identifies nothing.
+    # BUILD_REVISION stamps the commit into the image (it has no git); /healthz and
+    # /admin report it, since the reused `:develop` tag identifies nothing.
     - name: Build the Docker image
       env:
-        # Through the environment, not interpolated into the script text: the
-        # only thing standing between a branch name and command execution on the
-        # runner is the `tr` filter in the step above. `$TAGS` below is
-        # intentionally unquoted — the tags are a space-separated list and word
-        # splitting is exactly what turns it into loop items.
+        # Passed through the environment, not interpolated into the script text.
+        # `$TAGS` is intentionally unquoted: word splitting turns the list into items.
         TAGS: ${{ steps.tags.outputs.tags }}
-        # Same treatment for the revision stamp: `docker build` runs it through the
-        # shell, so it goes through the environment like everything else.
         REVISION: ${{ github.sha }}
       run: |
         tag_args=""
         for tag in $TAGS; do tag_args="$tag_args --tag $tag"; done
-        # --pull is required here: unlike GitHub's ephemeral runners, the self-hosted
-        # runner has a persistent docker daemon, so a once-pulled python:3.11-slim
-        # would sit in its cache for months and every build would inherit an
-        # unpatched base layer.
+        # --pull: the self-hosted runner's docker daemon is persistent, so a cached
+        # base image would otherwise never get updates.
         docker build --pull . --file Dockerfile \
           --build-arg BUILD_REVISION="$REVISION" $tag_args
 
-    # Deliberately AFTER the build, not before it: the build runs `docker build` over
-    # a Dockerfile and a tag list derived from a branch name, and nothing in it needs
-    # registry credentials (the base image comes from Docker Hub). Logging in only
-    # here keeps REGISTRY_TOKEN out of the daemon's config for the whole build.
+    # After the build: the build needs no registry credentials, so REGISTRY_TOKEN
+    # stays out of the daemon's config while it runs.
     - name: Log in to the Gitea container registry
       uses: docker/login-action@v4
       with:
@@ -254,27 +188,16 @@ jobs:
 
     - name: Push Docker images
       env:
-        # Same reasoning as in the build step: pass the tags through the
-        # environment, and leave `$TAGS` unquoted so it word-splits into items.
         TAGS: ${{ steps.tags.outputs.tags }}
       run: |
         for tag in $TAGS; do docker push "$tag"; done
 
     - name: Remove the built images from the runner
-      # The runner's docker daemon is persistent, so the images built here would
-      # otherwise pile up and grow the disk forever. This step removes ONLY the
-      # tags this run created — no `docker system prune`, which would also wipe
-      # images of other repos sharing the same daemon.
-      # It does NOT reclaim everything: `docker rmi <tag>` never touches the
-      # BuildKit cache (that lives in a separate builder store and is only freed
-      # by `docker builder prune`), and `--pull` above leaves the previous base
-      # image untagged as a dangling image whenever upstream updates it.
-      # Both need a separate periodic cleanup on the runner host.
-      # `always()` so the cleanup runs even when the push above fails.
+      # The runner's daemon is persistent and shared with other repos, so only the
+      # tags this run created are removed (no `docker system prune`). The BuildKit
+      # cache and dangling base images need a separate cleanup on the runner host.
       if: always()
       env:
-        # Same reasoning as in the build step: pass the tags through the
-        # environment, and leave `$TAGS` unquoted so it word-splits into items.
         TAGS: ${{ steps.tags.outputs.tags }}
       run: |
         for tag in $TAGS; do docker rmi "$tag" || true; done

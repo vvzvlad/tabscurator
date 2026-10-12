@@ -4,7 +4,7 @@ The load-bearing property under test is a NEGATIVE one: an out-of-pass caller (r
 preview, reset) must never overwrite a ``pending_snapshot_id`` that somebody else — a
 curator pass above all — is waiting on. The channel matches snapshot ids EXACTLY, so an
 overwrite makes the instance's answer to the PASS be dropped and silently ejects it from
-that pass. Each copy of the poll loop used to do exactly that.
+that pass.
 
 The second property is the counterweight: a request that outlived its own timeout has
 been abandoned by its sender, so the slot MUST be reclaimable — otherwise one extension
@@ -176,8 +176,8 @@ async def test_the_reclaim_horizon_outlasts_a_pass_still_waiting(tmp_path):
     therefore fire while the pass still considers itself waiting, which is precisely the
     ejection this module exists to prevent, so the horizon is 2×.
 
-    Reddens if ``_RECLAIM_AFTER_TIMEOUTS`` drops back to 1: at 1.5× elapsed the slot
-    would be claimed here instead of still being respected."""
+    Fails if ``_RECLAIM_AFTER_TIMEOUTS`` drops to 1: at 1.5× elapsed the slot would be
+    claimed here instead of still being respected."""
     db = await _make_db(tmp_path)
     await _insert_instance(db, "i1", session_id="s1", snapshot_at=0)
     reg = Registry()

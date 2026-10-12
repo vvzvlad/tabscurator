@@ -234,16 +234,11 @@ async def test_list_tabs_freshens_and_flags_a_disconnected_sibling(tmp_path):
 
 
 async def test_list_tabs_reflects_a_snapshot_that_lands_during_the_call(tmp_path):
-    """Acceptance 1 of #44: the tab a human opened is in the SAME response.
+    """The tab a human opened is in the SAME response.
 
-    This is the whole point of the issue — `list_tabs` used to kick a refresh and
-    return the mirror it already had, so a freshly opened tab appeared only on the
-    NEXT call. The test drives the real path: the mirror is stale, `ensure_fresh`
-    sends a `snapshot_request`, the extension answers by applying a snapshot that
-    carries a new tab, and the tool must return that tab.
-
-    It is deliberately written to fail if the tabs are read BEFORE the fan-out —
-    the exact shape of the original bug.
+    The test drives the real path: the mirror is stale, `ensure_fresh` sends a
+    `snapshot_request`, the extension answers by applying a snapshot that carries a new
+    tab, and the tool must return that tab. Fails if the tabs are read BEFORE the fan-out.
     """
     db = await _make_db(tmp_path)
     now = tools._now_ms()
@@ -353,9 +348,8 @@ async def test_list_tabs_reader_error_maps_to_error_and_isolates_siblings(tmp_pa
 
 
 async def test_list_instances_exposes_pending_plan(tmp_path):
-    # Acceptance (c): list_instances additionally carries the resume/pending-plan shape
-    # the startpage's StateResponse already sees — verbatim _parse_pending_plan of the
-    # same latch — which the agent previously only saw as the bare resume_pending bool.
+    # list_instances carries the resume/pending-plan shape the startpage's StateResponse
+    # sees (verbatim _parse_pending_plan of the same latch), not only resume_pending.
     db = await _make_db(tmp_path)
     app = _app(db)
     assert (await tools.list_instances(app))["pending_plan"] is None
@@ -467,7 +461,7 @@ async def test_open_tab_sends_command(tmp_path):
     assert frame["command"] == protocol.CMD_OPEN_TAB and frame["params"]["url"] == "https://a"
 
 
-# --- #45: open_tab window as address + server cross-check --------------------
+# --- open_tab window as address + server cross-check -------------------------
 async def test_open_tab_with_window_id_stamps_the_frame(tmp_path):
     # Acceptance 1: a named window rides the frame as `windowId`, and when the extension
     # answers with that same window the verb succeeds and echoes it.
@@ -714,7 +708,7 @@ async def test_move_tab_sends_the_command_and_omits_an_absent_index(tmp_path):
 
 
 async def test_move_tab_null_window_extracts_into_a_new_window(tmp_path):
-    # #45 (acceptance 6, server half): window_id=None rides the frame verbatim as
+    # Server half: window_id=None rides the frame verbatim as
     # `windowId: null` — the extract-into-a-new-window address — and the created window's
     # id comes back unchanged in the response. No `index` key: the new window's tab is its
     # only one and the extension owns the default.
@@ -897,8 +891,8 @@ async def test_execute_js_debugger_carries_the_budget_as_timeout_ms(tmp_path):
 
 async def test_execute_js_debugger_default_call_still_bounds_the_evaluation(tmp_path):
     """The most common call omits ``timeout_ms``. The frame must STILL carry a concrete positive CDP
-    deadline (the global CMD_TIMEOUT_MS) — otherwise a non-terminating snippet would hang the debugger
-    call forever and wedge the tab. Regression guard for the default path."""
+    deadline (the global CMD_TIMEOUT_MS), otherwise a non-terminating snippet would hang the debugger
+    call forever and wedge the tab."""
     db = await _make_db(tmp_path)
     reg = Registry()
     cs, ws = _put_conn(reg, "main")
@@ -1658,9 +1652,8 @@ async def test_pause_writes_setting_and_bumps_epoch(tmp_path):
 
 async def test_mcp_resume_runs_a_pass_like_the_http_twin(tmp_path):
     """§7/§11 parity: a manual start runs a pass IMMEDIATELY, whichever door it came
-    through. The MCP tool used to stop after the settings write, so an agent's resume
-    left the curator idle until the next tick — the same verb with two behaviours.
-    Reddens (no `pass` key, no `passes` row) if the tool stops writing settings only."""
+    through, so an agent's resume does not leave the curator idle until the next tick.
+    Fails (no `pass` key, no `passes` row) if the tool only writes settings."""
     db = await _make_db(tmp_path)
     app = _app(db)
     await tools.pause(app)
@@ -1686,8 +1679,8 @@ async def test_mcp_resume_against_an_empty_world_leaves_the_latch_armed(tmp_path
     construction — no evidence that the armed 30-action plan shrank. The pass runs,
     reports ``no_ready_instances``, and leaves the latch untouched (value included):
     clearing on an evidence-free pass would make ``resume_pending`` flap with fleet
-    connectivity. Reddens if the runner goes back to clearing the latch on a pass
-    with an empty ready set.
+    connectivity. Fails if the runner clears the latch on a pass with an empty ready
+    set.
     """
     from src.db.settings_store import set_setting
 
@@ -3012,13 +3005,13 @@ async def test_navigate_tab_with_wait_until_carries_the_wait_and_a_longer_budget
 
 
 async def test_navigate_tab_answers_in_wait_fors_shape_when_a_wait_was_asked_for(tmp_path):
-    """One question, one shape. ``wait_for`` renames on purpose — ``elapsedMs`` is the WIRE
-    spelling and everything the agent reads is snake_case — and passing the extension's
-    frame through raw made the neighbouring verb answer camelCase, with a SECOND ``ok:true``
-    nested inside an answer whose subject may be a condition that did not hold.
+    """One question, one shape. ``wait_for`` renames on purpose (``elapsedMs`` is the WIRE
+    spelling and everything the agent reads is snake_case), so ``navigate_tab`` must not
+    pass the extension's frame through raw: that would answer camelCase, with a SECOND
+    ``ok:true`` nested inside an answer whose subject may be a condition that did not hold.
 
-    Both budget tests above go through a fake ``send_command`` that answers ``{}``, so the
-    response shape was pinned by nothing; this one hands over a realistic frame.
+    Both budget tests above go through a fake ``send_command`` that answers ``{}``; this
+    one hands over a realistic frame to pin the response shape.
     """
     db = await _make_db(tmp_path)
     reg = Registry()
@@ -3037,17 +3030,15 @@ async def test_navigate_tab_refuses_an_OLD_extension_with_its_OWN_code(tmp_path)
     """A frame with no ``matched`` key means "this extension cannot wait" — never "it did
     not match" — and it says so in a code of its OWN.
 
-    ``navigate_tab`` is an OLD command with a NEW parameter: a pre-wave bundle drops
+    ``navigate_tab`` is an OLD command with a NEW parameter: an older bundle drops
     ``waitUntil`` as an unknown key, does the ``tabs.update`` and answers ``{ok:true}``.
-    Reading ``matched`` off that with ``.get`` manufactured ``{matched: false,
-    elapsed_ms: 0}`` — a verdict nobody reached, and one the agent cannot tell from an
-    honest "the condition never became true". Same class as ``open_tab``'s ``windowId``
+    Reading ``matched`` off that with ``.get`` would manufacture ``{matched: false,
+    elapsed_ms: 0}``, a verdict nobody reached. Same class as ``open_tab``'s ``windowId``
     cross-check: new service + old extension is a guaranteed state.
 
-    THE CODE IS THE POINT OF THIS ASSERTION. It used to be ``precondition_failed``, which
-    this verb also answers for four ARGUMENT refusals — and the agent's move is opposite
-    there ("fix the argument and call again") to here ("this copy's extension is too old;
-    retrying cannot help"). §11's rule for ``pinned_cross_window`` is that a distinct
+    The code is the point of this assertion: ``precondition_failed`` is what this verb
+    answers for ARGUMENT refusals ("fix the argument and call again"), while here
+    retrying cannot help. §11's rule for ``pinned_cross_window`` is that a distinct
     situation gets a distinct code so a caller can branch without parsing prose.
     """
     db = await _make_db(tmp_path)
@@ -3233,9 +3224,9 @@ async def test_open_tab_lease_writes_an_exemption_the_pass_honours(tmp_path):
 
 
 async def test_navigate_tab_carries_a_live_open_tab_lease_to_the_new_url(tmp_path):
-    """#72: the pass matches a lease against the tab's LIVE url, so the agent's own
-    navigation used to drop it silently. The lease follows the tab, same deadline, and is
-    reported in ``open_tab``'s shape — with or without a wait."""
+    """The pass matches a lease against the tab's LIVE url, so the agent's own navigation
+    must carry it along. The lease follows the tab, same deadline, and is reported in
+    ``open_tab``'s shape, with or without a wait."""
     db = await _make_db(tmp_path)
     await _known_instance(db)
     reg = Registry()
@@ -3459,11 +3450,11 @@ async def test_open_tab_lease_judges_the_INSTANCE_exactly_as_set_exemption_does(
     """The instance is an ARGUMENT of the lease, and both doors onto ``exemptions`` must
     judge it the same way.
 
-    ``_write_open_lease`` called ``_upsert`` directly, so ``open_tab`` could write a row for
-    an instance ``set_exemption`` refuses — a row the pass can never match, since it matches
-    on ``instance_id``. The practical risk is small (a live socket implies an active row),
-    which argues for the check being cheap, not for it being absent: two doors that disagree
-    about who may be written for is how a rule gets quietly weakened on one side.
+    If ``open_tab`` skipped the instance check, it could write a row for an instance
+    ``set_exemption`` refuses, a row the pass can never match (it matches on
+    ``instance_id``). The practical risk is small (a live socket implies an active row),
+    but two doors that disagree about who may be written for is how a rule gets quietly
+    weakened on one side.
     """
     db = await _make_db(tmp_path)
     await _known_instance(db, "main")

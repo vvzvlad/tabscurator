@@ -6,7 +6,7 @@
 // (`{ok, result}` / `{ok, error}`); connection.js stamps `type` + `id` and sends
 // it back over the socket.
 //
-// Two invariants that are the whole point of this phase (§6, §12):
+// Two invariants (§6, §12):
 //
 //   1. The volatile close_tab guards are RE-CHECKED AT THE EDGE, live, against
 //      chrome.tabs.get / chrome.windows.getLastFocused / the own activity map —
@@ -86,15 +86,11 @@ export function isHttpUrl(url) {
   return u.protocol === "http:" || u.protocol === "https:";
 }
 
-// A DISCARDED tab is one the browser unloaded from memory to save RAM (issue #68). It still
-// EXISTS — `chrome.tabs.get` answers it with `discarded:true` and its url — so it is not
-// `no_such_tab`; and its url is usually http/https, so it is not the "wrong scheme"
-// `precondition_failed` either. But `chrome.scripting.executeScript` / `chrome.debugger.attach`
-// into it fails with the opaque "Cannot access contents of the page. Extension manifest must
-// request permission…", which blames the manifest for a tab that only needs reloading. So EVERY
-// verb that INJECTS into the page or ATTACHES the debugger reads `tab.discarded` right after its
-// `chrome.tabs.get` and refuses with `tab_discarded` — a code the agent can act on (wake_tab, or
-// navigate_tab to its url) — BEFORE the injection produces that misleading manifest error.
+// A DISCARDED tab is one the browser unloaded from memory. It still exists (`chrome.tabs.get`
+// answers `discarded:true` and its url), but injecting into it or attaching the debugger fails
+// with an opaque "Extension manifest must request permission…" error. So every verb that
+// injects or attaches refuses with `tab_discarded` first — a code the agent can act on
+// (wake_tab, or navigate_tab to its url).
 //
 // Returns a `fail(...)` outcome when `tab` is discarded, else `null` (caller proceeds). Placed
 // AFTER the existence check (a thrown `tabs.get` is `no_such_tab`) and BEFORE `isHttpUrl`, so the
@@ -134,8 +130,8 @@ function discardedFail(tab, tabId) {
 // `awaitPromise` (default false) buys the two KEYWORDS indirect eval cannot parse: a
 // top-level `await`, and a top-level `return` (a SyntaxError in eval). It is NOT what
 // makes async code work in general — chrome.scripting awaits a promise the injected
-// function returns, so `fetch(u).then(r => r.json())` resolves on the default path and
-// always has. Reach for the flag when the snippet wants to WRITE `await`/`return`.
+// function returns, so `fetch(u).then(r => r.json())` resolves on the default path.
+// Reach for the flag when the snippet wants to WRITE `await`/`return`.
 //
 // AsyncFunction, not `new Function("(async()=>{" + source + "})()")`: string-splicing the
 // source into a wrapper breaks on a source whose last line is a `//` comment — the
@@ -143,10 +139,8 @@ function discardedFail(tab, tabId) {
 // constructor takes the body verbatim and supplies the braces itself.
 //
 // It is compiled in TWO STEPS, the strategy a REPL uses, because the constructor makes the
-// source the function BODY — which throws an expression's completion value away. Compiled
-// only that way, `awaitPromise:true` would answer null for `document.title`: exactly the
-// silent null this flag exists to remove, and worse, since an agent that turns the flag on
-// for every call would get nulls everywhere. So: EXPRESSION first, statements as fallback.
+// source the function BODY, which throws an expression's completion value away (null for
+// `document.title`). So: EXPRESSION first, statements as fallback.
 export function evalInWorld(source, awaitPromise) {
   // chrome.scripting structured-clones the result on its way out of the page, and a value
   // that cannot be cloned — a DOM node, a function, a circular object, a Window — becomes
@@ -154,12 +148,8 @@ export function evalInWorld(source, awaitPromise) {
   // most confusing failure this verb has. Name it instead.
   const describe = (v) => {
     // A PROMISE is CHAINED, never cloned — and this test must come BEFORE the probe.
-    // chrome.scripting awaits a promise the injected function returns, so
-    // `Promise.resolve(42)` and `fetch(u).then(r => r.json())` have always worked with no
-    // flag at all; but structuredClone throws DataCloneError on a promise, so probing one
-    // would report `{__unserializable:"Promise"}` and swallow the data the agent asked
-    // for. Chaining puts the probe on the RESOLVED value — the one that actually crosses
-    // the boundary — which is where it belonged all along.
+    // chrome.scripting awaits a returned promise, but structuredClone throws on one, so
+    // the probe goes on the resolved value — the one that actually crosses the boundary.
     //
     // The `.then` read is guarded for the same reason the `.constructor` read below is: an
     // exotic proxy can throw on property access. A throw here just falls through to the
@@ -197,9 +187,7 @@ export function evalInWorld(source, awaitPromise) {
     }
   };
   if (!awaitPromise) {
-    // Indirect eval — today's path, unchanged. The ONLY observable difference is that a
-    // result which used to arrive as `null` because it could not be cloned now names
-    // itself; a value that clones fine is returned byte for byte as before.
+    // Indirect eval. A result that cannot be cloned names itself via describe().
     // eslint-disable-next-line no-eval
     return describe((0, eval)(source));
   }
@@ -209,16 +197,10 @@ export function evalInWorld(source, awaitPromise) {
   // load-bearing: a source ending in a `//` comment would otherwise swallow the closing
   // paren — the same hazard that rules out splicing an IIFE, one wrapper layer down.
   //
-  // Step 2 — retry the expression with trailing whitespace and semicolons stripped.
-  // `document.title;` is the ORDINARY way to write a one-liner, and that semicolon inside
-  // the parens is a SyntaxError: without this step the most common shape of all fell
-  // through to the statement body, which has no `return`, and the value was lost — the
-  // silent null this flag exists to remove, back again. The trim is safe because it removes
-  // ONLY trailing `;` and whitespace, and neither can change an EXPRESSION's value; code
-  // that is genuinely more than one statement (`const a = 1; a;`) still fails to parse
-  // inside the parens and still reaches step 3. The trailing NEWLINE is load-bearing here
-  // for the same reason as in step 1 — the trim stops at the first non-`;`/non-space
-  // character, so a source ending in a `//` comment is left exactly as it was.
+  // Step 2 — retry the expression with trailing whitespace and semicolons stripped:
+  // `document.title;` is a SyntaxError inside the parens. Trimming `;` cannot change an
+  // expression's value, and real multi-statement code still fails here and reaches step 3.
+  // The trailing NEWLINE matters for the same reason as in step 1.
   //
   // Step 3 — a SyntaxError from BOTH expression attempts means it was never an expression
   // (`const r = await f(); return r.status`), so compile the ORIGINAL, untouched source as
@@ -476,7 +458,7 @@ export function rectInWorld(selector) {
 // to the deadline, turning a typo into a full budget spent on the wrong question. A
 // `containerSelector` that matched nothing is `{noContainer}`, distinct from a bad selector.
 //
-// It also answers `top` / `atBottom` (#74): where the scroller stood BEFORE this step moved
+// It also answers `top` / `atBottom`: where the scroller stood BEFORE this step moved
 // it, i.e. the settled result of the previous step plus whatever loaded since — a read right
 // after the assignment would see a smooth-scrolling page that has not moved yet.
 export function scrollAndCountInWorld(containerSelector, direction, countSelector) {
@@ -705,12 +687,12 @@ export async function dispatchCommand(frame, ctx = {}) {
       // the checkbox here at the edge, and the service's js_audit row before the send.
       case CMD_START_JS:
         return await startJs(params);
-      // The first chrome.debugger (CDP) verb (§12, wave 18): gated by the SAME single
+      // The first chrome.debugger (CDP) verb (§12): gated by the SAME single
       // JS & Debugger checkbox as execute_js, but carries no arbitrary code and writes no
       // js_audit row (it only fakes focus, exfiltrating nothing).
       case CMD_SET_FOCUS_EMULATION:
         return await setFocusEmulation(params);
-      // WebSocket-frame capture (§12, wave 21). start is DATA-BEARING — the same JS & Debugger
+      // WebSocket-frame capture (§12). start is DATA-BEARING — the same JS & Debugger
       // checkbox as execute_js, and (service side) a js_audit row before the send. read drains
       // the already-authorised buffer (no second audit); stop is idempotent teardown.
       case CMD_START_WS_CAPTURE:
@@ -719,7 +701,7 @@ export async function dispatchCommand(frame, ctx = {}) {
         return await readWsFrames(params);
       case CMD_STOP_WS_CAPTURE:
         return await stopWsCapture(params);
-      // Wake a discarded tab (issue #68): a reload re-materialises it and we wait for load.
+      // Wake a discarded tab: a reload re-materialises it and we wait for load.
       // A FIXED action (like navigate_tab) — no execute_js checkbox, no js_audit row.
       case CMD_WAKE_TAB:
         return await wakeTab(params, nowFn, sleep);
@@ -743,7 +725,7 @@ export async function dispatchCommand(frame, ctx = {}) {
 // devtools window and a fullscreen showcase "are neither folded NOR merged into".
 //
 // The fullscreen half is not a detail: on macOS a wall dashboard lives as a fullscreen
-// window on its own Space (§1, ledger row 43). Letting it be a merge TARGET dumps every
+// window on its own Space (§1). Letting it be a merge TARGET dumps every
 // other window's tabs into the showcase — and a window merge is explicitly NOT undoable
 // (§9), so there is nothing to restore the layout from. The same predicate keeps a
 // curator-opened copy (open_tab) out of that showcase.
@@ -832,7 +814,7 @@ async function pickNormalWindowId() {
 // macOS the browser lives with none daily) we CREATE one unfocused instead of
 // failing: a failure would push the relocation to `deferred` and on to quarantine.
 async function openTab(params, nowFn, map) {
-  // #49 bulk: an `items` array is the LIST form — the extension loops it item by item
+  // Bulk: an `items` array is the LIST form — the extension loops it item by item
   // (native array forms are fail-fast and report nothing per element) and answers ONE
   // frame carrying a per-item `results` array. See openTabBulk.
   if (Array.isArray(params.items)) {
@@ -841,7 +823,7 @@ async function openTab(params, nowFn, map) {
   if (!isHttpUrl(params.url)) {
     return fail(ERR_PRECONDITION_FAILED, "open_tab accepts only http/https urls");
   }
-  // #45 "window as address": an explicit `windowId` names the destination. The CALLER
+  // "window as address": an explicit `windowId` names the destination. The CALLER
   // chose it (an agent addressing one window), so it is validated with the SAME §9
   // predicate merge_windows/move_tab use, and every miss is a loud refusal — never the
   // auto-select path's "fall back to a window of our own". Without a `windowId` this is
@@ -878,7 +860,7 @@ async function openTab(params, nowFn, map) {
       return fail(ERR_BUSY_DRAGGING, msg);
     }
     // The window vanished between getAll() and create(). The response depends on WHO
-    // chose it (#45): a window WE auto-selected is retried in one we make ourselves
+    // chose it: a window WE auto-selected is retried in one we make ourselves
     // (windows.create cannot lose that race), but a window the CALLER named is refused
     // with `no_window` — silently relocating the tab to some other window would put it
     // where the caller did not ask, and an OLD extension that ignored the key is exactly
@@ -904,7 +886,7 @@ async function openTab(params, nowFn, map) {
 // Only when every guard still holds do we mark the curator cause (AWAITED, so the
 // mark is durably written before Chrome activates a neighbour) and remove.
 async function closeTab(params, nowFn, map) {
-  // #49 bulk: an `items` array is the LIST form — loop item by item, ONE frame back.
+  // Bulk: an `items` array is the LIST form — loop item by item, ONE frame back.
   if (Array.isArray(params.items)) {
     return await closeTabBulk(params, nowFn, map);
   }
@@ -976,7 +958,7 @@ async function getTab(params) {
 }
 
 // get_tab {items:[{tabId}]} -> {results:[{index, ok, tabId, error?}]}. The bulk copy-check
-// for #49 relocate: each item is its OWN chrome.tabs.get in a try/catch, so one gone tab
+// for bulk relocate: each item is its OWN chrome.tabs.get in a try/catch, so one gone tab
 // (ERR_NO_SUCH_TAB) does not sink the whole frame — a present copy answers ok:true, a
 // vanished one ok:false + error, matched back by index. No mutation, purely a read.
 async function getTabBulk(params) {
@@ -1031,21 +1013,15 @@ async function focusWindow(params) {
 // navigate_tab {tabId, url}. Validate the scheme at the edge (same anti-smuggle
 // rule as open_tab), then point the tab at the url.
 //
-// NOTE (§7/§5): the resulting onUpdated document-change stamps the tab's
-// lastActive, so a curator navigation reads as activity and refreshes the idle
-// clock. This is accepted BY DESIGN for now: it errs SAFE (a too-fresh tab is
-// never wrongly closed; it self-heals within IDLE_MINUTES), navigate_tab has no
-// curator caller yet (reset defers the content change; MCP is a later phase), and
-// per-tab curator-nav suppression is a new mechanism best added with its first
-// real caller. curatorCause is per-WINDOW (for a close/move neighbour activation),
-// which cannot express "suppress this one tab's navigation".
+// NOTE (§7/§5): the resulting onUpdated document-change stamps the tab's lastActive, so
+// a curator navigation refreshes the idle clock. This errs safe (a too-fresh tab is never
+// wrongly closed). curatorCause is per-window and cannot suppress one tab's navigation.
 //
-// `waitUntil` (§6, optional) turns the fire-and-forget navigation into one that reports
-// when the page is actually there. DEFAULT `'none'` is today's behaviour byte for byte —
-// same single `tabs.update`, same bare `{ok:true}` — because the reset path
-// (src/api/rules.py) calls this verb and must not change at all.
+// `waitUntil` (§6, optional) reports when the page is actually there. The default
+// `'none'` is a single `tabs.update` and a bare `{ok:true}`, which the reset path
+// (src/api/rules.py) relies on.
 //
-//   'none'     — return as soon as the update is issued (today).
+//   'none'     — return as soon as the update is issued.
 //   'load'     — poll until the tab reports `status === 'complete'`.
 //   'selector' — poll until `selector` matches in the page (needs `selector`).
 //
@@ -1188,118 +1164,32 @@ function injectingProbe(tabId, selector, textContains, verb) {
   };
 }
 
-// A probe that answers "the navigation this command issued has COMMITTED" — the gate BOTH
-// of navigate_tab's waiting modes run before they start testing their own condition.
+// A probe that answers "the navigation this command issued has COMMITTED" — the gate both
+// of navigate_tab's waiting modes run before testing their own condition.
 //
-// `chrome.tabs.update(tabId, {url})` does NOT move `tab.url`: until the new document
-// commits, `tabs.get` keeps answering the PREVIOUS url and the target sits in
-// `tab.pendingUrl`. Injecting inside that window reads the OLD DOM, and that produced two
-// distinct wrong answers: a selector that exists on both pages (`#app`, `body`, an SPA
-// header) matched at once — so `waitUntil` waited for nothing — and a tab leaving a
-// non-http page (`about:blank`, a `chrome://` newtab, `file://`) tripped the per-poll
-// scheme guard and answered "navigate_tab target is not an http/https tab": an error about
-// something that did not happen, AFTER the navigation was already issued. The single
-// pre-probe pause cannot cover either: the commit lands after the server answers, so
-// 250 ms is a heuristic, not a guarantee.
+// `chrome.tabs.update(tabId, {url})` does not move `tab.url`: until the new document
+// commits, `tabs.get` answers the previous url and the target sits in `tab.pendingUrl`.
+// Injecting in that window reads the old DOM (a selector present on both pages matches at
+// once; a non-http start trips the scheme guard). `waitUntil:'load'` is gated too: the
+// flip to `loading` can be delayed (beforeunload, throttled tab, busy worker), and until
+// then `complete` describes the page being left.
 //
-// `waitUntil:'load'` is gated for the SAME reason and not by symmetry. `status` is meant to
-// flip to `loading` when the navigation STARTS, but a `beforeunload` dialog, a throttled
-// background tab or a busy MV3 worker delays that flip past our first poll — and until it
-// happens, `complete` describes the page being LEFT. One gate, both modes.
+// Signals, in order of trust:
+//   1. `pendingUrl` set => still in flight (the manifest grants `tabs`, so it is present).
+//   2. the url is the target, or it left `startUrl` (a redirect elsewhere is still the new
+//      document). A `#fragment` or `pushState` move can open the gate on the old DOM.
+//   3. the tab went `loading` and came back `complete` — for a navigation that ends on
+//      `startUrl`. Not used when the tab was already `loading` before the update: that
+//      round would be the old document finishing.
 //
-// Three signals, in the order they are trustworthy:
-//   1. `pendingUrl` is set => still in flight, never commit. (It needs the `tabs`
-//      permission, which the manifest grants, so this is the normal case, not a fallback.)
-//   2. the tab's url IS the target, or it simply LEFT `startUrl` — a redirect landing
-//      elsewhere is still the new document, which is what "commit" has to mean here.
-//      ⚠️ Leaving `startUrl` is not PROOF of a new document: a `#fragment` target, or a
-//      `pushState` from the page being left, moves the url same-document and opens the
-//      gate on the OLD DOM. Same escape as the 204/attachment case, different signal.
-//   3. the tab went `loading` and came back `complete` — for a navigation whose url can
-//      never satisfy (2), e.g. a redirect chain that lands back on the address we started
-//      from. Least precise of the three, hence last, and reachable only after (1) cleared.
-//      It ALSO requires the tab not to have been `loading` before the update: see the
-//      paragraph on that at the bottom, which is where this signal's own wrong answer lived.
-//
-// ⚠️ Navigating a tab to the address it is ALREADY on rests on (1) alone: the moment
-// `pendingUrl` clears, (2) holds by definition, and (3) is never reached. Where the field
-// is unavailable the gate would open on the pre-reload document — accepted deliberately,
-// because there the old document IS the same page, and the alternative (demand (3)'s
-// loading→complete round) answers `matched:false` about a reload short enough to fit
-// between two polls.
-//
-// AND A BOUNDED GRACE, because those three leave a hole that none of them can close. A
-// navigation whose FINAL address is `startUrl` — a redirect that bounces back, `/admin`
-// refused throwing the tab to `/login` — can never satisfy (2); and if it also commits and
-// finishes inside the pre-pause (cache, a local redirect, a 304), no poll ever observes
-// `loading`, so (3) is dead too. The gate would then stay shut for the WHOLE deadline and
-// answer `matched:false` about a page that is loaded and does contain the selector — where
-// the same call answered `matched:true` in 250 ms before the gate existed. So after
-// WAIT_COMMIT_GRACE_POLLS CONSECUTIVE polls in which nothing suggested a navigation at all
-// — no `pendingUrl`, no `loading`, the url still `startUrl`, and the tab already `complete`
-// BEFORE the update, so this `complete` cannot be the old page still finishing — the gate
-// opens anyway.
-//
-// WHAT THE GRACE ASSUMES — written down so a later reader can attack the assumption instead
-// of guessing it: that a navigation which has really STARTED exposes `pendingUrl` within one
-// `tabs.get`. That is deliberately NOT the claim that `status` flips promptly; the paragraph
-// gating 'load' above says the opposite about `status`, and the two only look opposed.
-// `pendingUrl` is set by the navigation controller when the request is issued, while the
-// `loading` flip is what `beforeunload`, a throttled tab or a busy worker delay. So the
-// grace leans on the OTHER signal, the one that argument does NOT call unreliable — which is
-// why the two can both be true. Falsify it — a browser that leaves `pendingUrl` empty while
-// a load is in flight — and the grace starts firing on live navigations; then the bound has
-// to grow, or this signal has to change.
-//
-// IT IS NOT CONFINED TO THE ⚠️ CORNER ABOVE, and pretending otherwise would be the comment
-// lying about its own cost. "Three polls with no evidence" requires NEITHER that the
-// addresses match NOR that the document be unchanged: start `https://old/`, target
-// `https://new/`, a navigation simply not visible yet, and the answer is `matched:true`
-// about `https://old/` with the tab still on the old address. That is a THIRD way to be
-// answered about the document being left, next to the two the MCP description names (a
-// same-address reload; a navigation that changes no document at all). It is the deliberate
-// trade, not an oversight: a rare wrong document instead of a CERTAIN wrong answer after the
-// full deadline. Narrowing it — demanding `targetUrl === startUrl` — would close this third
-// escape and reopen the very stall the grace exists for, since a redirect that lands back on
-// `startUrl` has a TARGET that differs. The BOUND is what keeps it rare rather than normal:
-// a navigation that really started needs one `tabs.get` to show `pendingUrl` or `loading`,
-// not three, so anything still silent on the third poll is a navigation we have no evidence
-// of at all.
-//
-// IT DOES NOT APPLY TO A NON-HTTP(S) START, and that narrowing is exactly the shape of the
-// hole. Every case the grace exists for — a redirect bouncing back to `startUrl`, a cache
-// hit, a 304 — presupposes an http(s) document to bounce back TO: a tab sitting on
-// `about:blank` cannot "redirect back to about:blank". So on a non-http start the grace
-// bought nothing and re-opened precisely the two wrong answers this gate was written to
-// prevent — `precondition_failed: not an http/https tab` for 'selector' (an error about a
-// navigation that DID happen) and `matched:true` about `about:blank` for 'load'. No
-// injection ever reached the non-http document (the per-poll scheme guard held), so what it
-// cost was wrong ANSWERS, not access.
-//
-// A TAB ALREADY `loading` GETS NEITHER (3) NOR THE GRACE, and the (3) half is the one that
-// was actually wrong rather than merely missing. Such a tab produces a `loading` →
-// `complete` round ALL BY ITSELF, out of the document it is LEAVING — so (3) used to read
-// that as the commit, and it did so TWO POLLS EARLIER than the grace it is denied would
-// have. Reproduced: a mid-load tab whose flip to `loading` and whose `pendingUrl` are both
-// delayed past our polls (a `beforeunload` dialog, a throttled tab, a busy MV3 worker — the
-// same three reasons the 'load' gate exists at all), the old page landing on poll 2, and the
-// answer `matched:true` at 500 ms about `https://old/`, with the selector probe injected
-// into the OLD DOM. That is the precise defect this whole gate exists to remove, so the
-// `startStatus !== "loading"` term closes it. Pinned by "...and gets no SIGNAL (3) either"
-// in commands.test.js — the older "gets NO grace" test cannot see it, because there the
-// commit lands on the first poll and `sawLoading` never turns true.
-//
-// WHAT REFUSING IT COSTS, written down rather than discovered later: for a tab that was
-// mid-load, a navigation whose FINAL address is the one it started from — the redirect that
-// bounces back, `/admin` refused throwing the tab to `/login` and back — now has NO signal
-// left at all. (2) is unsatisfiable by definition, (3) is refused here, the grace was
-// refused above; the navigation really happened, and the answer is `matched:false` at the
-// deadline. That is the trade this codebase keeps making: an agent that knows it does not
-// know beats one told confidently about the page it has just left. Two things are NOT part
-// of that cost — navigating a mid-load tab to the address it is ALREADY on (there (2) holds
-// the moment `pendingUrl` clears, the ⚠️ corner above), and a `startStatus` of `null` or
-// `unloaded` (the term claims "not `loading`", and an unknown or discarded status is not a
-// known `loading`; only a `complete` start earns the GRACE, which is the stricter test).
+// Plus a bounded grace: after WAIT_COMMIT_GRACE_POLLS consecutive polls with no evidence of
+// a navigation (no `pendingUrl`, no `loading`, url still `startUrl`, and the tab `complete`
+// before the update), the gate opens anyway. Without it, a redirect that bounces back to
+// `startUrl` and finishes inside the pre-pause would stall until the deadline. It assumes a
+// started navigation shows `pendingUrl` within one `tabs.get`. Cost: a navigation not yet
+// visible after those polls is answered about the old document. The grace applies only to
+// an http(s) start (nothing redirects back to `about:blank`) and never to a tab that was
+// already `loading`, so such a tab returning to its start url answers `matched:false`.
 function navigationCommitted(tabId, targetUrl, startUrl, startStatus) {
   let sawLoading = false;
   let quietPolls = 0;
@@ -1312,24 +1202,17 @@ function navigationCommitted(tabId, targetUrl, startUrl, startStatus) {
       return false;
     }
     if (tab.url === targetUrl || (startUrl !== null && tab.url !== startUrl)) return true;
-    // (3), and the `startStatus` term is load-bearing: for a tab that was ALREADY `loading`
-    // when the update was issued, a `complete` seen now is the OLD document finishing. See
-    // "A TAB ALREADY `loading` GETS NEITHER (3) NOR THE GRACE" above for the reproduction
-    // and for what refusing it costs.
+    // (3): for a tab that was already `loading` when the update was issued, a `complete`
+    // seen now is the old document finishing.
     if (sawLoading && tab.status === "complete" && startStatus !== "loading") return true;
     const quiet =
-      // REDUNDANT BY CONSTRUCTION, and kept anyway: the only way to reach this line with
-      // `sawLoading` true and the tab `complete` is a `startStatus` of `loading` — which the
-      // very next term rejects. (Before that term existed the return just above did the same
-      // job on its own.) So no mutation of this one can redden a test; it is insurance
-      // against these lines being reordered, not a load-bearing check.
+      // Redundant with the return above (only a `loading` start reaches here with
+      // `sawLoading` and `complete`); kept as insurance against reordering.
       !sawLoading &&
       startStatus === "complete" &&
       tab.status === "complete" &&
       tab.url === startUrl &&
-      // See "IT DOES NOT APPLY TO A NON-HTTP(S) START" above: no non-http page can be the
-      // page a redirect bounces back to, so the grace would buy nothing and cost two wrong
-      // answers. Pinned by "a non-http START gets NO grace" in commands.test.js.
+      // No grace for a non-http start: nothing redirects back to a non-http page.
       isHttpUrl(startUrl);
     quietPolls = quiet ? quietPolls + 1 : 0;
     return quietPolls >= WAIT_COMMIT_GRACE_POLLS;
@@ -1397,8 +1280,8 @@ async function getText(params) {
   });
   const got = ((results || [])[0] || {}).result || {};
   if (got.badSelector) {
-    // "Your selector does not parse" — distinct from "it parsed and matched nothing", and
-    // from `internal`, which is what this used to become by escaping the injection.
+    // "Your selector does not parse" — distinct from "it parsed and matched nothing" and
+    // from `internal`.
     return fail(
       ERR_PRECONDITION_FAILED,
       `invalid CSS selector ${JSON.stringify(selector)}: ${got.message}`,
@@ -1544,7 +1427,7 @@ async function click(params) {
 // negative the agent can act on. Spelling both as `timeout` would ask the agent to tell
 // them apart from a string; spelling this one as `{ok:true, matched:false}` puts the
 // distinction in the response SHAPE, which survives the wire. `timeout` therefore has
-// exactly ONE producer again: the service, when nothing came back.
+// exactly ONE producer: the service, when nothing came back.
 //
 // EXACTLY ONE predicate. Zero or several is `precondition_failed` and NOTHING is polled:
 // "wait for A and B" and "wait for A or B" are different verbs, and guessing which one
@@ -1582,7 +1465,7 @@ async function waitFor(params, nowFn, sleep) {
   } catch {
     return fail(ERR_NO_SUCH_TAB, `no such tab: ${params.tabId}`);
   }
-  // GATE THE INJECTING PREDICATES ONLY (issue #68). `selector` / `textContains` inject into the
+  // GATE THE INJECTING PREDICATES ONLY. `selector` / `textContains` inject into the
   // page, so a discarded tab would fail them with the opaque manifest error — refuse honestly
   // with `tab_discarded` first. `urlMatches` is deliberately NOT gated: it reads only
   // `chrome.tabs.get(...).url`, which a discarded tab answers, so an agent can legitimately wait
@@ -1679,7 +1562,7 @@ async function scrollUntil(params, nowFn, sleep) {
   let rounds = 0;
   let stable = 0;
   let stopped = "deadline";
-  // #74: what tells "grew, then ran out" from "never moved" behind the same `stable`.
+  // what tells "grew, then ran out" from "never moved" behind the same `stable`.
   let countStart = 0;
   let scrolledPx = 0;
   let lastTop = null;
@@ -1868,11 +1751,8 @@ async function mergeWindows(params, nowFn, map) {
     //     test is what stops focus from smuggling a FULLSCREEN showcase in as the
     //     destination of an irreversible merge.
     //  2. Otherwise §9's stated rule — "обычное окно с наибольшим числом вкладок; при
-    //     равенстве — меньший window_id" — via the SAME helper open_tab uses. The old
-    //     `normalWindows[0]` was not that rule and not deterministic at all:
-    //     chrome.windows.getAll() promises no order, so the target flipped between
-    //     calls and the fewest-moves property §9 buys with "наибольшее число вкладок"
-    //     was lost.
+    //     равенстве — меньший window_id" — via the SAME helper open_tab uses
+    //     (chrome.windows.getAll() promises no order).
     //
     // `??` (not `||`): windowId 0 is a legal id that `||` would discard.
     const focusedTargetId = onScreenId !== null && mergeableIds.has(onScreenId) ? onScreenId : null;
@@ -1909,9 +1789,8 @@ async function mergeWindows(params, nowFn, map) {
   // never dropped: idle sources fold INTO the window in use.
   //
   // fullscreen is NOT re-checked here: it is a STRUCTURAL disqualification handled by
-  // `isMergeableWindow` above, which — unlike this filter — also bars it from being the
-  // TARGET. Keeping it only here was the bug: the line below deliberately exempts the
-  // target, so a fullscreen showcase passed straight through as the destination.
+  // `isMergeableWindow` above, which also bars it from being the TARGET (this filter
+  // exempts the target).
   // `tabs` / `onScreenId` are the live reads taken at the top of this command.
   const inUse = new Set();
   for (const t of tabs) {
@@ -1952,10 +1831,8 @@ async function mergeWindows(params, nowFn, map) {
 }
 
 // move_tab {tabId, windowId, index?}. Move ONE tab to a window and position inside
-// THIS browser. Cross-INSTANCE relocation is the open+close pair of §7 and works
-// only because the browsers are separate processes; between the windows of one
-// browser there was no verb at all, though `chrome.tabs.move` has driven
-// merge_windows all along. `index` defaults to -1, chrome's own "append to the end".
+// THIS browser (cross-instance relocation is the open+close pair of §7). `index`
+// defaults to -1, chrome's own "append to the end".
 //
 // §9's PINNED rule applies verbatim and is the reason this refusal has a code of its
 // own. A cross-window `tabs.move` silently resets `pinned` (undocumented Chromium;
@@ -1970,7 +1847,7 @@ async function mergeWindows(params, nowFn, map) {
 //
 // INSIDE one window a pinned tab moves freely: `pinned` survives the move, so there
 // is no shield to lose and nothing to protect against.
-// #45 move_tab {windowId:null}: extract ONE tab into a brand-new BACKGROUND normal
+// move_tab {windowId:null}: extract ONE tab into a brand-new BACKGROUND normal
 // window. `chrome.windows.create({tabId})` moves the existing tab in — no open+close,
 // no new tab id — and goes down the SAME Chromium path a cross-window `tabs.move` takes,
 // so it strips `pinned`. Two consequences handled here:
@@ -2055,13 +1932,13 @@ async function extractTabToNewWindow(tab, nowFn, map) {
 }
 
 async function moveTab(params, nowFn, map) {
-  // #49 bulk: an `items` array is the LIST form — loop item by item, ONE frame back.
+  // Bulk: an `items` array is the LIST form — loop item by item, ONE frame back.
   if (Array.isArray(params.items)) {
     return await moveTabBulk(params, nowFn, map);
   }
   const tabId = params.tabId;
   const targetWindowId = params.windowId;
-  // #45: `windowId: null` is the "extract into a NEW window" address — the one legal
+  // `windowId: null` is the "extract into a NEW window" address — the one legal
   // non-integer. Any OTHER non-integer (a string, undefined, a float) is still a
   // malformed frame refused at the edge.
   const extractToNew = targetWindowId === null;
@@ -2137,10 +2014,9 @@ async function moveTab(params, nowFn, map) {
   return ok({ tabId, windowId: targetWindowId, index });
 }
 
-// --- #49 bulk verbs (ONE frame per list, looped item by item) ----------------
+// --- bulk verbs (ONE frame per list, looped item by item) --------------------
 //
-// The owner chose "one command for the whole list": the socket carries ONE `command`
-// frame whose params hold an `items` array, the extension LOOPS it in its own
+// The socket carries ONE `command` frame whose params hold an `items` array, the extension LOOPS it in its own
 // try/catch, and answers ONE `response` carrying `{results:[{index, ok, ...}]}`. The
 // match key is `index` (position in the input) — an open item has no id before it
 // opens. The native array forms (chrome.tabs.move/remove accept arrays) are NOT used:
@@ -2423,7 +2299,7 @@ async function executeJs(params) {
   return ok({ results });
 }
 
-// --- chrome.debugger foundation + set_focus_emulation (§12, wave 18) ----------
+// --- chrome.debugger foundation + set_focus_emulation (§12) -------------------
 //
 // The tabs THIS extension currently holds a debugger attached to. Module-level, and
 // deliberately in-memory: the emulation set by `Emulation.setFocusEmulationEnabled` holds
@@ -2432,13 +2308,11 @@ async function executeJs(params) {
 // something to detach.
 //
 // ⚠️ MV3 LIFETIME: the service worker can die and be resurrected, losing this in-memory set
-// (and, with it, chrome.debugger drops every attachment the dead worker held — detach is
-// implicit on worker teardown). For THIS slice that is acceptable: a lost attachment means
-// the emulation lapses and a fresh enable re-attaches cleanly. A later slice moves the set
-// into chrome.storage.session so a resurrected worker can reconcile.
+// (chrome.debugger drops the dead worker's attachments too). The emulation then lapses and
+// a fresh enable re-attaches cleanly.
 const debuggerAttachedTabs = new Set();
 
-// WebSocket-frame capture buffers (§12, wave 21): tabId -> { url|null, frames: [], dropped,
+// WebSocket-frame capture buffers (§12): tabId -> { url|null, frames: [], dropped,
 // bytes }. `frames` is a ring buffer of the tab's captured WS frames; `url` is the socket URL
 // learned from `Network.webSocketCreated`; `dropped` counts frames the ring evicted on
 // overflow (surfaced to the agent, never a silent loss); `bytes` is the running weight of the
@@ -2528,7 +2402,7 @@ const DEBUGGER_PROTOCOL_VERSION = "1.3";
 export function handleDebuggerDetach(source) {
   if (source && typeof source.tabId === "number") {
     debuggerAttachedTabs.delete(source.tabId);
-    // Also drop any WS-capture record for the tab (§12, wave 21): the debugger is gone, so the
+    // Also drop any WS-capture record for the tab (§12): the debugger is gone, so the
     // `Network.*` events stop arriving and the buffer would otherwise HANG forever after the
     // human closed the tab / opened DevTools — pinning page data in worker memory with no verb
     // left that could ever detach it (stop_ws_capture would try to detach a tab already gone).
@@ -2543,7 +2417,7 @@ export function handleDebuggerDetach(source) {
   }
 }
 
-// chrome.debugger.onEvent sink (§12, wave 21). Registered ONCE at SW init (service-worker.js)
+// chrome.debugger.onEvent sink (§12). Registered ONCE at SW init (service-worker.js)
 // alongside onDetach. Only tabs with a live capture record are serviced; every other tab's
 // events (and every non-WS method) are ignored. On `Network.webSocketCreated` the socket URL is
 // stamped onto the record; on a frame received/sent a compact entry is buffered — for a TEXT
@@ -2587,7 +2461,7 @@ export function __resetDebuggerState() {
   evalDebuggerTabs.clear();
 }
 
-// set_focus_emulation {tabId, enabled} (§12, wave 18). Makes a BACKGROUND tab behave as
+// set_focus_emulation {tabId, enabled} (§12). Makes a BACKGROUND tab behave as
 // focused (no timer throttling) without taking the screen from the human. STATEFUL: the
 // emulation holds only while the debugger is attached.
 //
@@ -2621,7 +2495,7 @@ async function setFocusEmulation(params) {
   const enabled = !!params.enabled;
 
   if (enabled) {
-    // A discarded tab (issue #68) cannot be attached: `chrome.debugger.attach` on it fails with
+    // A discarded tab cannot be attached: `chrome.debugger.attach` on it fails with
     // the opaque manifest error, so refuse honestly with `tab_discarded` before the attach. Only
     // the ENABLE (attach) path needs this — `enabled=false` below is an idempotent teardown (like
     // stop_ws_capture), and a discarded tab's debugger has already auto-detached anyway, so
@@ -2653,9 +2527,8 @@ async function setFocusEmulation(params) {
     // not await), so two simultaneous enable calls on the SAME tab can both read has()===false
     // before either add()s. The second attach then throws, and the losing call returns
     // debugger_attach even though the first call attached successfully. The end state is still
-    // consistent (the tab is in the Set once, attached once), so this is a deliberately
-    // acceptable race. We do NOT "fix" it with an optimistic add() before attach: that would
-    // let the losing call's rollback delete the winner's record — strictly worse.
+    // consistent (the tab is in the Set once, attached once). An optimistic add() before
+    // attach would let the losing call's rollback delete the winner's record.
     if (!debuggerAttachedTabs.has(tabId)) {
       try {
         await chrome.debugger.attach({ tabId }, DEBUGGER_PROTOCOL_VERSION);
@@ -2721,9 +2594,9 @@ async function setFocusEmulation(params) {
   return ok({ enabled: false });
 }
 
-// --- WebSocket-frame capture (§12, wave 21) ---------------------------------
+// --- WebSocket-frame capture (§12) ------------------------------------------
 //
-// The FIRST data-bearing verb down the chrome.debugger path. start attaches the debugger,
+// start attaches the debugger,
 // turns on `Network.*` delivery, and opens a ring buffer that `handleDebuggerEvent` fills;
 // read drains that buffer to the agent; stop disables the domain and detaches. The frames
 // carry PAGE DATA (a messenger's conversation), so start rides the SAME gate as execute_js —
@@ -2747,7 +2620,7 @@ async function startWsCapture(params) {
   } catch {
     return fail(ERR_NO_SUCH_TAB, `no such tab: ${tabId}`);
   }
-  // A discarded tab (issue #68) cannot be attached — `chrome.debugger.attach` fails on it with the
+  // A discarded tab cannot be attached — `chrome.debugger.attach` fails on it with the
   // opaque manifest error — so refuse honestly with `tab_discarded` before the attach.
   const discarded = discardedFail(tab, tabId);
   if (discarded) return discarded;
@@ -3156,7 +3029,7 @@ async function executeJsDebugger(params) {
     return fail(ERR_JS_DISABLED, "execute_js_debugger is disabled in this copy's options");
   }
   const tabId = params.tabId;
-  // Existence first (a thrown tabs.get is no_such_tab), then the discarded check (issue #68 — the
+  // Existence first (a thrown tabs.get is no_such_tab), then the discarded check (the
   // debugger cannot attach to an unloaded tab), then the http/https edge guard — the same order and
   // the same edge invariants execute_js and every other debugger verb enforce (§12).
   let tab;
@@ -3271,7 +3144,7 @@ async function executeJsDebugger(params) {
   }
 }
 
-// --- wake_tab: wake a discarded tab (issue #68) ------------------------------
+// --- wake_tab: wake a discarded tab -----------------------------------------
 //
 // wake_tab {tabId, timeoutMs} -> {wasDiscarded}. The cure for `tab_discarded`: the browser
 // unloaded the tab from memory (`tab.discarded === true`), so every injecting/attaching verb

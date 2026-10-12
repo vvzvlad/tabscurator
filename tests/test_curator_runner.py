@@ -78,8 +78,8 @@ class Ext:
         )
         self.focused[instance_id] = focused
         # Seed the instances row so apply_snapshot's epoch guard passes. status='active'
-        # models an enrolled instance (issue #35): the known_instance_ids / send_command
-        # status filters only see 'active' rows.
+        # models an enrolled instance: the known_instance_ids / send_command status
+        # filters only see 'active' rows.
         await self.db.write(
             lambda c: c.execute(
                 "INSERT INTO instances (id, conn_epoch, connected, session_id, status) "
@@ -227,12 +227,12 @@ async def test_phase_a_opens_copy_and_writes_relocate(tmp_path):
         await db.close()
 
 
-# --- #45 regression: the curator's open_tab frame NEVER names a window --------
+# --- the curator's open_tab frame NEVER names a window -------------------------
 async def test_phase_a_open_tab_frame_carries_no_window_id(tmp_path):
-    """#45 acceptance 10: window addressing is an MCP-only feature. The curator's own
-    pass must issue the SAME ``open_tab`` frame as before — no ``windowId`` key — so the
-    extension's deterministic §9 auto-select (and its vanished-window retry) is untouched.
-    Slip a ``windowId`` into phase A's frame and this reddens."""
+    """Window addressing is an MCP-only feature. The curator's own pass issues an
+    ``open_tab`` frame with no ``windowId`` key, so the extension's deterministic §9
+    auto-select (and its vanished-window retry) decides. Fails if phase A's frame carries a
+    ``windowId``."""
     db = await _mkdb(tmp_path)
     try:
         await _seed_rule(db, "grafana.example.lc", "prox")
@@ -412,7 +412,7 @@ async def test_phase_b_source_mismatch_abandons_no_loop(tmp_path):
 
 # --- phase B: source reconnects (epoch bump) MID-PASS => ejected, no strike --
 async def test_phase_b_source_epoch_bump_midpass_ejects_no_strike(tmp_path):
-    """WARNING 3 (§7): an instance whose ``conn_epoch`` changes between readiness
+    """§7: an instance whose ``conn_epoch`` changes between readiness
     capture and execution is ejected from the pass. Here the SOURCE reconnects while
     the target ``get_tab`` is in flight: the ``close_tab`` must be SKIPPED (deferred) —
     no ``precondition_failed`` strike, no quarantine, the relocate row stays live.
@@ -543,7 +543,7 @@ async def test_phase_a_invalid_tab_id_writes_no_rows(tmp_path):
 
 # --- dedupe/singleton: survivor vanished before close => source NOT closed ----
 async def test_close_survivor_vanished_source_not_closed(tmp_path):
-    """SUGGESTION 4 (§7): an inter-instance ``dedupe_close`` closes the source only
+    """§7: an inter-instance ``dedupe_close`` closes the source only
     because a survivor holds the url in the target. If the human closed that survivor
     between the snapshot and now, closing the source would delete the LAST copy. The
     curator must ``get_tab`` the survivor first and, finding it gone, NOT close.
@@ -613,7 +613,7 @@ def _expire_lease_raw(db_path):
 
 
 async def test_phase_b_lease_lost_before_completion_pending_survives_then_reconciled(tmp_path):
-    """THE race (§7 WARNING-1). Phase B: the browser closes the source successfully,
+    """The lease race (§7). Phase B: the browser closes the source successfully,
     then a pause bumps the lease epoch BEFORE the completion write. The `relocate_close`
     was recorded `pending` UNDER the guard first, so it SURVIVES the fenced completion
     (neuter the pending write => there is no row and this reddens). The NEXT pass, whose
@@ -875,7 +875,7 @@ async def test_dedupe_close_happy_path_one_done_row_tab_deleted(tmp_path):
 
 # --- reconcile is GATED on the source instance's readiness for THIS pass -----
 async def test_reconcile_skipped_when_source_instance_not_ready(tmp_path):
-    """BLOCKER: a pending close must NOT be resolved off a STALE mirror.
+    """A pending close must NOT be resolved off a STALE mirror.
 
     The source instance does not answer this pass's snapshot_request (laptop asleep, the
     service worker never woke), so the mirror still shows the world as it was BEFORE the
@@ -915,7 +915,7 @@ async def test_reconcile_skipped_when_source_instance_not_ready(tmp_path):
         await db.close()
 
 
-# --- revoke: retire-relocations pass step + drain cascade (issue #35 §5, acc 8) --
+# --- revoke: retire-relocations pass step + drain cascade (acc 8) ----------------
 async def test_revoke_retires_relocation_invalidates_rule_and_keeps_drain(tmp_path):
     """Acceptance 8, end to end. Revoke a NON-main instance that owns a live relocation
     and a rule; ONE pass must:
@@ -953,7 +953,7 @@ async def test_revoke_retires_relocation_invalidates_rule_and_keeps_drain(tmp_pa
         )
         ext.responder = lambda i, c, p: {"ok": True, "result": {}}
 
-        # Revoke 'gone' (non-main) — the transaction Task E will call.
+        # Revoke 'gone' (non-main): the transaction the /admin revoke handler calls.
         rev = await db.write(
             lambda c: revoke_instance(c, "gone", now=5000, main_instance_id="main")
         )
@@ -1591,8 +1591,8 @@ async def test_run_all_executes_over_threshold_in_one_pass_without_latching(tmp_
 
 
 async def test_over_threshold_without_run_all_still_latches(tmp_path):
-    """(run_all regression) the SAME plan WITHOUT run_all still defers behind the
-    threshold latch — run_all is the only reason it executes."""
+    """The SAME plan WITHOUT run_all still defers behind the threshold latch; run_all is
+    the only reason it executes."""
     db = await _mkdb(tmp_path)
     try:
         ext = Ext(db)

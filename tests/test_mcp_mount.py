@@ -1,9 +1,9 @@
 """The MCP mount (§11): the app BOOTS with /mcp wired in (no "Task group is not
 initialized"), the endpoint is reachable at /mcp (NOT /mcp/mcp), and it is behind the
-ADMIN_TOKEN Bearer (issue #35 §4: the agent equals the human — ADMIN_TOKEN, not a
-per-instance secret or any other token).
+ADMIN_TOKEN Bearer (the agent equals the human: ADMIN_TOKEN, not a per-instance secret
+or any other token).
 
-These redden if the §11 mount trap is reintroduced:
+These fail if the §11 mount trap is reintroduced:
 * remove ``async with mcp.session_manager.run()`` from the lifespan -> the initialize
   POST 500s with "Task group is not initialized".
 * mount the sub-app under /mcp instead of the exact Route -> /mcp doubles to /mcp/mcp.
@@ -26,10 +26,9 @@ _ACCEPT = "application/json, text/event-stream"
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{
             "cmd_timeout_ms": 1000,
@@ -89,7 +88,7 @@ def test_mcp_requires_bearer(tmp_path):
     with TestClient(app) as client:
         assert client.post("/mcp", json=_init_body(), headers=_headers(token=None)).status_code == 401
         assert client.post("/mcp", json=_init_body(), headers=_headers(token="wrong")).status_code == 401
-        # issue #35 §4: only ADMIN_TOKEN opens /mcp — a valid METRICS_TOKEN must not.
+        # Only ADMIN_TOKEN opens /mcp; a valid METRICS_TOKEN must not.
         assert client.post(
             "/mcp", json=_init_body(), headers=_headers(token=METRICS_TOKEN)
         ).status_code == 401

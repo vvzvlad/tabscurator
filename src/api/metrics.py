@@ -236,20 +236,13 @@ def _collect(conn: sqlite3.Connection, main_instance_id: str) -> Snapshot:
             except (TypeError, ValueError):
                 snap.deferred[key] = snap.deferred.get(key, 0)
 
-    # ACTIVE instances only (issue #35 §6: the status filter belongs in BOTH read
+    # ACTIVE instances only (§6: the status filter belongs in BOTH read
     # surfaces or neither — ``rules.access.known_instance_ids`` and
-    # ``rules.preview.load_preview_input`` already carry it, and ``db.state`` now does too).
+    # ``rules.preview.load_preview_input`` and ``db.state`` carry it too).
     #
-    # This one is load-bearing for ALERTING, not just tidiness. Revocation is a routine
-    # operation (a laptop is retired) and there is no ``DELETE FROM instances`` anywhere in
-    # the project, so an unfiltered family kept exporting the retired instance forever:
-    # ~12h later ``curator-instance-absent`` fires on a machine nobody will ever connect
-    # again, and NOTHING can clear it — not a revoke, not a re-approve under a new id, not
-    # an operator action of any kind. A revoked row is also the one row whose ``connected``
-    # flag is least trustworthy, which is exactly what the half-open-socket rule keys on.
-    # Dropping it from the family makes Prometheus mark those series stale and the alert
-    # resolve on its own. The instance stays fully visible to the operator in
-    # ``/admin/instances``, which deliberately lists every status.
+    # Load-bearing for alerting: rows are never deleted, so a revoked instance in this
+    # family would fire ``curator-instance-absent`` forever with nothing able to clear it.
+    # ``/admin/instances`` still lists every status.
     for iid, connected, last_seen_at, snapshot_at in conn.execute(
         "SELECT id, connected, last_seen_at, snapshot_at FROM instances "
         "WHERE status = 'active' ORDER BY id"
@@ -328,14 +321,9 @@ def _collect(conn: sqlite3.Connection, main_instance_id: str) -> Snapshot:
     # when it has NO row, when it has never said hello (last_seen_at IS NULL) — and,
     # equally, when its row is NOT ``active``.
     #
-    # The status arm is what makes this metric survive the enrollment upgrade. Migration
-    # step 2 moves every pre-existing row (MAIN included) to ``status='revoked'`` and
-    # touches NEITHER ``last_seen_at`` NOR ``connected``, so on a live install the row
-    # after the upgrade reads (revoked, connected=1, last_seen_at=<yesterday>). Keyed on
-    # last_seen_at alone this gauge therefore reported 0 — "MAIN is fine" — while every
-    # hello was being rejected, the stock branch was dead and the dashboard was green.
-    # That is the precise scenario issue #35 «Совместимость» promises will ring within 15
-    # minutes, and the release note tells the operator to expect it.
+    # The status arm matters: migration step 2 revokes every pre-existing row (MAIN
+    # included) without touching ``last_seen_at`` or ``connected``, so last_seen_at alone
+    # would report MAIN as fine while every hello is rejected.
     main_row = conn.execute(
         "SELECT last_seen_at, status FROM instances WHERE id = ?", (main_instance_id,)
     ).fetchone()
@@ -390,10 +378,8 @@ def _enroll_window_seconds_remaining(snap: Snapshot, now_ms: int) -> int:
     * Armed and still open (deadline in the future) -> POSITIVE seconds remaining,
       rounded UP so a sub-second-but-open window still reads >= 1 and never collides
       with the "no window" 0 (matches :func:`src.curator.enroll._ceil_seconds`).
-    * Armed and AT-OR-PAST its deadline -> 0. A naturally-expired window is not an
-      anomaly — it simply reads closed, symmetric with the no-window case. (The
-      window-overdue alert was dropped in #37, so the gauge no longer needs to encode a
-      negative "overdue" magnitude; a closed window and no window are both benign 0.)
+    * Armed and AT-OR-PAST its deadline -> 0. A naturally-expired window simply reads
+      closed, symmetric with the no-window case.
 
     Read from the DB at scrape time, so a restart re-reads the SAME stored deadline and
     changes nothing; a degraded scrape (no snapshot) leaves ``enroll_window_until`` None

@@ -5,10 +5,9 @@ snapshot_request (so it is FRESH) and then the service's ``open_tab``; the targe
 answers the ``close_tab`` for the copy. The HTTP POST runs on a background thread so
 the same test thread can drive the sockets while the request is in flight.
 
-Each guard test is written to REDDEN if its guard is removed (the brief's mutation
-checklist): exemption-on-undo, session-mismatch-skips-copy-close,
-window_merge-reported-un-undone, confirm-gate, reverse-ts, restored_at-skipped,
-origin_action_id-links-both-halves.
+Each guard test is written to fail if its guard is removed: exemption-on-undo,
+session-mismatch-skips-copy-close, window_merge-reported-un-undone, confirm-gate,
+reverse-ts, restored_at-skipped, origin_action_id-links-both-halves.
 """
 
 import sqlite3
@@ -29,7 +28,7 @@ from src.app import create_app
 from src.db.actions import insert_action
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -38,10 +37,9 @@ AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **over)
 
@@ -133,7 +131,7 @@ def _seed_tab(db_path, instance_id, tab_id, url):
 
 def _connect_fresh(client, db_path, instance_id="src", session="sess-1", tabs=None):
     """hello + answer the initial snapshot_request so the instance is FRESH."""
-    # Secret-based hello (issue #35): approve the instance (Task E) before it can hello.
+    # Secret-based hello: the instance must be enrolled before it can hello.
     approve_instance(db_path, instance_id)
     ws = client.websocket_connect("/ext").__enter__()
     ws.send_json(_hello(instance_id=instance_id, session=session))
@@ -678,11 +676,9 @@ def test_undo_sync_mcp_relocation_double_undo_already_undone(tmp_path):
 
 # --- the copy close is JOURNALED, at-least-once (Фаза 16 discipline) --------
 def test_undo_copy_close_is_journaled_pending_then_done(tmp_path):
-    """Until now this was the ONLY close in the system performed outside the journal:
-    ``close_tab`` followed by a bare ``DELETE FROM tabs``. Фаза 16's at-least-once
-    discipline (``pending`` under the guards BEFORE the command, completed after)
-    applies here for the same reason — a process death between a successful close and
-    the completion write must not erase the evidence that a tab was closed.
+    """The undo copy-close goes through the journal: ``pending`` under the guards BEFORE
+    the ``close_tab`` command, completed after, so a process death between a successful
+    close and the completion write does not erase the evidence that a tab was closed.
 
     The test freezes the moment the ``close_tab`` is on the wire: the row must already
     exist as ``pending``, and become ``done`` only after the extension answers."""
@@ -821,10 +817,10 @@ def test_undo_skipped_copy_close_writes_no_row(tmp_path):
 def test_undo_survives_a_failed_open_and_still_reports_per_row(tmp_path):
     """§10: "построчный итог" — partial undo is the norm, not a failure.
 
-    A ``CommandError`` from ``open_tab`` used to escape ``restore_row`` (it is not an
-    ``HTTPException``, which is all ``_undo_relocation`` catches and all ``create_app``
-    renders), so the client got a 500 AFTER some rows had already been reversed —
-    ``restored_at`` stamped, copies closed — with no record of what had happened.
+    A ``CommandError`` from ``open_tab`` is not an ``HTTPException`` (all
+    ``_undo_relocation`` catches and all ``create_app`` renders); escaping, it would give
+    the client a 500 AFTER some rows had already been reversed (``restored_at`` stamped,
+    copies closed) with no record of what had happened.
 
     Here the second pure close is answered and the first is left to time out; the
     response must be 200 with one ``failed`` row carrying the §6 code and one undone."""

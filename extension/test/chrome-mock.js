@@ -138,7 +138,7 @@ export function createChromeMock(opts = {}) {
     moveError: opts.moveError || null, // when set, tabs.move throws this message
     removeError: opts.removeError || null, // when set, tabs.remove throws this message
     reloadError: opts.reloadError || null, // when set, tabs.reload throws this message (wake_tab)
-    // wake_tab (§6, #68): a reload un-discards the tab and drives it to `complete`. Left 0, the
+    // wake_tab (§6): a reload un-discards the tab and drives it to `complete`. Left 0, the
     // reload lands `complete` at once (the collapsed default); set to N and `status` stays
     // `loading` until the Nth subsequent `tabs.get`, counted in GETS so it is deterministic under
     // the fake clock — the same discipline as `navCommitAfterGets`.
@@ -161,12 +161,11 @@ export function createChromeMock(opts = {}) {
     scriptResults: opts.scriptResults || [{ result: null }], // scripting.executeScript return
     // ⚠️ DEFERRED COMMIT, opt-in. Real `tabs.update({url})` does NOT change `tab.url`:
     // until the navigation commits, `tabs.get` answers the PREVIOUS url and the target
-    // waits in `tab.pendingUrl`. This mock changed `url` SYNCHRONOUSLY, which is exactly
-    // why no test could see a probe reading the OLD document. Set `navCommitAfterGets` to
+    // waits in `tab.pendingUrl`. Set `navCommitAfterGets` to
     // N and the commit lands on the Nth `tabs.get` — counted in GETS, not milliseconds, so
     // it stays deterministic under the tests' fake clock. `navCommitUrl` is the address the
     // commit actually lands on when it differs from the requested one (a redirect).
-    // Left at 0 the old synchronous shortcut applies, so every existing test is untouched.
+    // Left at 0, `url` changes synchronously on `tabs.update`.
     navCommitAfterGets: opts.navCommitAfterGets || 0,
     navCommitUrl: opts.navCommitUrl || null,
     // ⚠️ COMMIT AND COMPLETION ARE TWO EVENTS, and collapsing them (as this mock did) makes

@@ -1,61 +1,27 @@
 # Curator alert rules — docs/architecture.md §12 «Наблюдаемость».
 #
-# FORMAT: a plain PROMETHEUS rule file (`groups → rules → alert/expr/for/labels/
-# annotations`), loadable by Prometheus (`rule_files:`) and by vmalert. Nothing else
-# is permitted here: both unmarshal this schema STRICTLY, so a single unknown field
-# rejects the WHOLE file and leaves the curator with no alerts at all — including
-# `curator-down`. In particular there is no `noDataState` key: that belongs to
-# Grafana-MANAGED alerts, whose provisioning format is a different schema entirely
-# (`data`/`refId`/`condition`), so a file carrying it loads in neither system.
+# FORMAT: a plain Prometheus rule file, loadable by Prometheus and vmalert. Both
+# parse it strictly: one unknown field (e.g. Grafana's `noDataState`) rejects the
+# whole file and leaves the curator with no alerts.
 #
-# CONVENTION (the "шапка" of this rules.yml — read before adding a rule):
+# CONVENTIONS:
+#   * Compare a ready-made gauge against a threshold; never `time() - <metric> > X`
+#     (an empty result is indistinguishable from a dead exporter).
+#   * An empty vector does not fire, so per-instance/per-kind families that are
+#     legitimately empty stay silent with nothing extra.
+#   * Only `curator-down` fires on missing data: `up == 0` or `absent(up{...})`.
+#   * Live readiness is not alertable (the laptop sleeps); sticky facts are.
 #
-#   * Compare a READY-MADE gauge against a threshold. NEVER write
-#     `time() - <metric> > X`. A comparison in PromQL/MetricsQL is a SERIES FILTER:
-#     on a healthy curator `time() - curator_last_pass_ts > …` matches nothing, and an
-#     empty result is indistinguishable from a dead exporter. So the service exports
-#     the ready-made gauges (overdue/age in seconds, suppression already applied) and
-#     every rule below is a plain gauge-vs-threshold compare.
-#
-#   * "No data" is expressed in PromQL, not in a rule field. An expression that
-#     returns an empty vector simply does not fire — which is EXACTLY what every
-#     per-metric rule below wants: a `{id}`/`{kind}`/`{to_instance}` family may be
-#     legitimately empty (no instances connected, empty rules/quarantine tables) and
-#     must stay SILENT. That silence is the Prometheus default, so those rules need
-#     nothing extra.
-#
-#   * The one case where absence MUST fire is TARGET LOSS, and absence there has two
-#     shapes: the target is scraped and failing (`up == 0`) or the target is gone from
-#     service discovery entirely (no `up` series at all). `absent()` covers the second
-#     — it returns 1 exactly when its argument has no series — so `curator-down` ORs
-#     the two. It is the only rule in this file that fires on missing data.
-#
-#   * Live readiness is NOT alertable (`ready` is false every night the laptop
-#     sleeps). The sticky, sleep-independent facts are alertable instead:
-#     `curator_main_instance_never_seen`, `curator_rules_total == 0`,
-#     `curator_last_pass_ok == 0`, and the half-open-socket combo.
-#
-# PASS_INTERVAL_MIN = 5 -> PASS_INTERVAL = 300s, 3× = 900s, 6× = 1800s. §7 fixes
-# "прохода не было" at 3×PASS_INTERVAL; 6× is reserved for snapshot-stale (§12).
-#
-#   ⚠️ MIND WHAT EACH GAUGE MEASURES, AND COUNT `for:` IN. §7 fixes the moment the
-#   alert FIRES, and firing time = (time the gauge crosses the threshold) + `for:`.
-#   `curator_pass_overdue_seconds` is overdue BEYOND the interval
-#   (`elapsed − PASS_INTERVAL`, see `_pass_overdue_seconds` in src/api/metrics.py), so
-#   for "fires at 3×PASS_INTERVAL":
-#       gauge > 300  is crossed at  elapsed = 300 + 300 = 600s
-#       + for: 5m (300s)          ->  fires at  900s = 3×PASS_INTERVAL  ✔
-#   Using 600 here would fire at 4×, the same overshoot that made 900 wrong. Every
-#   other age gauge (`snapshot_age`, `absent_seconds`, `backup_age`) is a RAW age, so
-#   its threshold is the plain multiple and only `for:` is added on top.
+# PASS_INTERVAL = 300s: 3× = 900s (§7 "no pass"), 6× = 1800s (snapshot-stale, §12).
+# Firing time = threshold crossing + `for:`. `curator_pass_overdue_seconds` is
+# elapsed − PASS_INTERVAL, so `> 300` + `for: 5m` fires at 900s. The other age gauges
+# are raw ages: threshold = plain multiple, `for:` on top.
 
 groups:
   - name: curator
     rules:
-      # The ONLY rule that fires on missing data — target loss / scrape down.
-      # `up == 0`: scraped and failing. `absent(up{...})`: no such target at all
-      # (dropped from service discovery, job renamed, config lost) — which a bare
-      # `up == 0` would silently miss, since a vanished target has no `up` series.
+      # Target loss: `up == 0` is scraped-and-failing, `absent(up{...})` is a target
+      # gone from service discovery (no `up` series at all).
       - alert: curator-down
         # [A]: up{job="curator"}   [C]: A == 0 OR A does not exist
         expr: up{job="curator"} == 0 or absent(up{job="curator"})
@@ -65,16 +31,10 @@ groups:
         annotations:
           summary: "Curator target is down or missing from discovery (no /metrics scrape)."
 
-      # A pass is overdue past 3×PASS_INTERVAL (§7). The gauge is already 0 while the
-      # curator is stopped, so a deliberate (indefinite) stop never lights this; the
-      # start verb runs a confirming pass immediately, which re-anchors the gauge with
-      # a fresh `passes` row. An armed over-threshold latch does not starve it either:
-      # the latched pass still runs and finalizes its row every interval.
+      # A pass is overdue past 3×PASS_INTERVAL (§7). The gauge is 0 while the curator
+      # is stopped, so a deliberate stop never lights this.
       - alert: curator-pass-overdue
         # [A]: curator_pass_overdue_seconds   [C]: A > 300
-        # The gauge is overdue-BEYOND-the-interval (elapsed − PASS_INTERVAL), so it
-        # crosses 300 at elapsed 600s; `for: 5m` then fires it at elapsed 900s =
-        # 3×PASS_INTERVAL exactly, which is the moment §7 promises.
         expr: curator_pass_overdue_seconds > 300
         for: 5m
         labels:
@@ -104,8 +64,8 @@ groups:
         annotations:
           summary: "Newest DB backup is older than ~26h (or missing)."
 
-      # Orphaned rules (instance_id no longer exists) — the stock branch silently
-      # mis-routes / defers forever.
+      # Orphaned rules (instance_id no longer exists) make the stock branch
+      # mis-route or defer forever.
       - alert: curator-rules-invalid
         # [A]: curator_rules_invalid   [C]: A > 0
         expr: curator_rules_invalid > 0
@@ -125,14 +85,9 @@ groups:
         annotations:
           summary: "Service is in degraded mode (a DB migration failed)."
 
-      # MAIN_INSTANCE_ID cannot serve the stock branch (§12) — sticky and
-      # sleep-independent, unlike live `ready`. The gauge covers all three ways that
-      # happens: no row, never connected, or a row that is not `active`. The last one is
-      # the case the enrollment upgrade creates on EVERY existing install (migration 2
-      # retires every pre-existing row, MAIN included), and issue #35 «Совместимость»
-      # names this alert as the thing that must ring within 15 minutes — so the summary
-      # names the remedy, since "never connected" would send the operator hunting a
-      # network fault that is not there.
+      # MAIN_INSTANCE_ID cannot serve the stock branch (§12): no row, never connected,
+      # or not `active` (migration 2 retires every pre-existing row, so MAIN needs
+      # re-approval after the enrollment upgrade — the summary names that remedy).
       - alert: curator-main-instance-never-seen
         # [A]: curator_main_instance_never_seen   [C]: A == 1
         expr: curator_main_instance_never_seen == 1
@@ -164,34 +119,9 @@ groups:
         annotations:
           summary: "Instance {{ $labels.id }} absent for over ~12h."
 
-      # The enrollment window is being HELD open (§6, issue #37 acceptance 5).
-      #
-      # History, because the shape of this rule is not obvious: #37 originally wanted
-      # `curator_enroll_window_seconds_remaining < 0` ("armed and overdue"), and that was
-      # correctly refused — the gauge then returned the raw (until − now) and a naturally
-      # expired window is never cleared from `settings`, so it would have gone negative
-      # forever after every ordinary enrollment and fired an alert that could never
-      # resolve. #35 landed the clamp (commit 56c073a): the gauge is now >0 while open and
-      # exactly 0 otherwise, "no window" and "expired window" being the same benign 0. So
-      # `< 0` is not just unnecessary, it is unreachable — and the metric was left with no
-      # rule at all, i.e. exported and dead.
-      #
-      # What IS alertable on the clamped gauge is the fact §6 actually cares about: the
-      # window is meant to be a SHORT operator-opened interval (that is the whole security
-      # argument for it — it bounds when a stolen hello can be approved), and one arm can
-      # hold the gauge above 0 for at most ENROLL_WINDOW_MIN. A gauge that stays positive
-      # for longer than that therefore means somebody keeps RE-ARMING, i.e. the enrollment
-      # surface is being kept open — the state where an unauthenticated peer with the code
-      # can file requests all day.
-      #
-      # `for:` is set against the CEILING, not the default. ENROLL_WINDOW_MIN is operator
-      # config bounded by `le=ENROLL_WINDOW_MAX_MIN` (60), so it is 10m only by default: at
-      # a perfectly legal ENROLL_WINDOW_MIN=20 a `for: 15m` would page on ONE ordinary
-      # arm — and page with the words "re-armed repeatedly", sending the operator to look
-      # for something that never happened. 65m > the hard 60m ceiling makes ANY single
-      # legal window unable to trip the rule, whatever the deployment configured, and the
-      # thing being alerted on (a window held open all day) is far above either number.
-      # The alert clears by itself the moment the window is closed or lapses.
+      # The enrollment window is being held open by re-arming (§6). The gauge is >0
+      # while a window is open and 0 otherwise; one arm lasts at most
+      # ENROLL_WINDOW_MAX_MIN (60m), so `for: 65m` cannot trip on any single legal window.
       - alert: curator-enroll-window-held-open
         # [A]: curator_enroll_window_seconds_remaining   [C]: A > 0 for 65m
         expr: curator_enroll_window_seconds_remaining > 0
@@ -201,15 +131,10 @@ groups:
         annotations:
           summary: "Enrollment window has stayed open for over 65m — longer than any single armed window can last (ENROLL_WINDOW_MAX_MIN=60), so it is being re-armed; close it with DELETE /admin/enroll/window (§10)."
 
-      # Someone is guessing ADMIN_TOKEN — the credential that opens /admin (approve,
-      # revoke), /api/* and /mcp. Keyed on the reason a FAILED POST /admin/login writes
-      # (src/api/admin_page.ADMIN_BAD_TOKEN_REASON), which is deliberately NOT the
-      # `admin_session` label: that one also ticks every time a browser opens the console
-      # before logging in, so a rule on it would be pure noise at any threshold a real
-      # brute force could reach. Severity critical rather than warning: unlike a bad
-      # enrollment code (which only buys a place in a list an operator must still approve),
-      # a guessed ADMIN_TOKEN is the whole service. >5 in 10m clears a fat-fingered
-      # operator; increase() over the window is its own smoothing, so no `for:`.
+      # Someone is guessing ADMIN_TOKEN (opens /admin, /api/* and /mcp). Keyed on the
+      # reason a failed POST /admin/login writes (src/api/admin_page.ADMIN_BAD_TOKEN_REASON),
+      # not `admin_session`, which also ticks on every console open before login.
+      # Critical: a guessed ADMIN_TOKEN is the whole service. increase() is the smoothing.
       - alert: curator-admin-token-bruteforce
         # [A]: increase(curator_auth_rejections_total{reason="admin_bad_token"}[10m])
         # [C]: A > 5
@@ -219,15 +144,9 @@ groups:
         annotations:
           summary: "Repeated failed /admin/login attempts (brute-force on ADMIN_TOKEN)."
 
-      # The /ext pre-auth ceiling is refusing connections (§6) — ENROLL_PREAUTH_MAX, the
-      # LAST line of the pre-auth defence (the silent-socket quota above it only shortens
-      # a socket's first-frame deadline and refuses nobody, so anything counted here means
-      # the ceiling itself was hit). At the shipping 128 a home-scale fleet never comes
-      # near it, so sustained refusals
-      # mean one of two things, and both need a human: a flood of anonymous sockets, or a
-      # slot leak — and the consequence is identical either way, instances being turned
-      # away at the handshake with nothing but this counter to say so (a refused
-      # reconnect leaves no instances row, no reject_reason and no log line for the peer).
+      # The /ext pre-auth ceiling (ENROLL_PREAUTH_MAX, default 128) is refusing
+      # connections (§6): a flood of anonymous sockets or a slot leak. A refused
+      # reconnect leaves no other trace than this counter.
       - alert: curator-ext-preauth-capacity
         # [A]: increase(curator_auth_rejections_total{reason="capacity"}[10m])
         # [C]: A > 5
@@ -237,13 +156,9 @@ groups:
         annotations:
           summary: "/ext is refusing connections at the pre-auth ceiling — instances cannot reconnect (§6)."
 
-      # Repeated bad enrollment codes — a brute-force against the open window (§6, issue
-      # #37). curator_auth_rejections_total is labeled per reason and the
-      # {reason="enroll_bad_code"} series exists ONLY once a bad code has been seen, so
-      # increase() over the window returns an empty vector on a healthy install and stays
-      # silent (the per-metric convention above); it fires when bad codes arrive faster
-      # than a fat-fingered operator would produce. No `for:` — the 10m increase window is
-      # itself the smoothing.
+      # Repeated bad enrollment codes — a brute-force against the open window (§6).
+      # The series exists only once a bad code has been seen, so a healthy install is
+      # silent. The 10m increase window is the smoothing.
       - alert: curator-enroll-code-bruteforce
         # [A]: increase(curator_auth_rejections_total{reason="enroll_bad_code"}[10m])
         # [C]: A > 5
@@ -253,25 +168,11 @@ groups:
         annotations:
           summary: "Repeated bad enrollment codes (brute-force on the enrollment window, §6)."
 
-      # An enroll_request asked for the id of an ALREADY-ACTIVE instance (§6). This is the
-      # ONE objection the removed approval step really answered — a name collision — and
-      # since there is no pending list anymore, this counter and the refusal shown in that
-      # browser's own settings are the ONLY traces the attempt ever happened: `_reject_enroll`
-      # creates nothing by construction, so there is no row, no reject_reason and no console
-      # entry for an operator to find.
-      #
-      # THRESHOLD 0, not 5, and it inherits that from the retired
-      # `curator-enroll-secret-conflict`: the peer already held a valid code for an OPEN
-      # window, so this is not a stranger guessing — it is either the operator naming a new
-      # browser after a live one (and that browser is now stuck, unable to enrol, with
-      # nothing in the console to show it) or an attempt to graft onto a live identity.
-      # Neither is background noise on a healthy install, where enrolments are rare and
-      # deliberate. increase() over 10m keeps a burst from one source collapsing into one
-      # page per scrape, and the series exists only once the refusal has been seen, so a
-      # healthy install stays silent.
-      #
-      # `bad_id` — a name outside [A-Za-z0-9._-]{1,64} — deliberately has NO rule: see
-      # `_REASONS_WITHOUT_A_RULE` in tests/test_deploy_alerts.py for the argument.
+      # An enroll_request asked for the id of an already-active instance (§6).
+      # `_reject_enroll` creates nothing, so this counter is the only server-side trace.
+      # Threshold 0: the peer held a valid code, so this is a naming mistake or an
+      # attempt to graft onto a live identity, never background noise.
+      # `bad_id` has no rule: see `_REASONS_WITHOUT_A_RULE` in tests/test_deploy_alerts.py.
       - alert: curator-enroll-id-taken
         # [A]: increase(curator_auth_rejections_total{reason="enroll_id_taken"}[10m])
         # [C]: A > 0
@@ -281,30 +182,11 @@ groups:
         annotations:
           summary: "An enroll_request asked for the id of a live instance and was refused — that browser cannot enrol under this name, and nothing else records the attempt (§6)."
 
-      # /api/* CORS is cutting the startpage off — the §12 «бесшумный отказ», and the ONE
-      # shape of it that no other signal reports.
-      #
-      # The CAUSE narrowed when the origin allow-list was retired (src/api/cors.py explains
-      # why: /api/* is behind require_api_caller, credentials are off, CORS binds browsers
-      # only, and the service is not internet-reachable). `allow_origins: *` removes the
-      # ORIGIN ground for a refusal. Starlette's other two remain: a requested METHOD
-      # outside the declared /api/* verbs, or a requested HEADER outside the declared list —
-      # i.e. a new verb or a new custom header added to the startpage's fetch without being
-      # added to src/api/cors.py.
-      #
-      # That is why the rule survived the allow-list. The failure MODE is unchanged and is
-      # exactly the one nothing else catches: the websocket is unaffected by CORS, so /ext
-      # stays connected and every instance stays green, while the newtab re-renders
-      # yesterday's cache («кэш от <время>») forever. No row, no reject_reason, no red
-      # anything — this counter is the only machine-readable trace.
-      #
-      # >5 in 10m, no `for:` (the increase() window is the smoothing). A cut-off startpage
-      # re-preflights on every newtab and on the service worker's quick-links flush, so a
-      # real mismatch produces a steady stream; a stray foreign page — already unlikely on a
-      # network that is not reachable from the internet (DEPLOY.md §3) — does not reach 5.
-      # The series exists only once a client is ACTUALLY being refused, so a fresh host
-      # whose extension is not installed yet stays silent instead of paging through its own
-      # bootstrap.
+      # /api/* CORS is cutting the startpage off (§12 «бесшумный отказ»). With
+      # `allow_origins: *`, a refusal means a method or header the startpage requests is
+      # not declared in src/api/cors.py. /ext is unaffected, so instances stay green while
+      # the newtab serves stale cache; this counter is the only trace. A cut-off
+      # startpage re-preflights on every newtab, so a real mismatch exceeds 5 quickly.
       - alert: curator-cors-preflight-rejected
         # [A]: increase(curator_auth_rejections_total{reason="cors_preflight"}[10m])
         # [C]: A > 5

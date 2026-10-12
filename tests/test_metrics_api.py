@@ -59,10 +59,9 @@ ALL_METRICS = [
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{
             "pass_interval_min": 5,
@@ -331,19 +330,15 @@ def test_main_instance_never_seen(tmp_path):
 
 
 def test_main_unusable_after_the_real_enrollment_migration(tmp_path):
-    """THE upgrade scenario, run through the REAL migration rather than a hand-made row.
+    """The upgrade scenario, run through the REAL migration rather than a hand-made row.
 
-    Issue #35 «Совместимость» promises that after the enrollment upgrade a MAIN which now
-    needs re-approval rings ``curator-main-instance-never-seen`` within 15 minutes, and
-    deploy/DEPLOY.md's release note repeats it. Migration step 2 gets there by moving every
-    pre-existing row to ``status='revoked'`` — and it touches NEITHER ``last_seen_at`` NOR
-    ``connected``, so the post-upgrade row is exactly (revoked, connected=1,
-    last_seen_at=<yesterday>): a shape a clean-DB test can never produce.
-
-    Keyed on ``last_seen_at`` alone the gauge read 0 on that row — every hello rejected,
-    the stock branch dead, the drain stopped, and not one alert. Redden: drop the status
-    arm from ``_collect``'s MAIN query and this returns 0.0 while
-    ``curator_instance_connected{id="main"}`` still claims 1.
+    After the enrollment upgrade a MAIN which needs re-enrolment must ring
+    ``curator-main-instance-never-seen`` within 15 minutes (deploy/DEPLOY.md's release
+    note). Migration step 2 moves every pre-existing row to ``status='revoked'`` and
+    touches NEITHER ``last_seen_at`` NOR ``connected``, so the post-upgrade row is
+    (revoked, connected=1, last_seen_at=<yesterday>): a shape a clean-DB test can never
+    produce. Redden: drop the status arm from ``_collect``'s MAIN query and this returns
+    0.0 while ``curator_instance_connected{id="main"}`` still claims 1.
     """
     from src.db.migrations import migrate
     from src.db.schema import STEPS
@@ -377,7 +372,7 @@ def test_main_unusable_after_the_real_enrollment_migration(tmp_path):
 
         body = _scrape(client)
         assert _scalar(body, "curator_main_instance_never_seen") == 1.0
-        # And the retired row no longer poses as a live instance in the per-instance
+        # And the retired row does not pose as a live instance in the per-instance
         # families, so nothing else reports the fleet as healthy either.
         assert _by_label(body, "curator_instance_connected", "id", "main") is None
 
@@ -515,12 +510,10 @@ def test_alerts_yml_convention():
 
     # Target loss is the ONE rule that fires on missing data, and it expresses that
     # in PromQL: `up == 0` (scraped and failing) OR `absent()` (gone from service
-    # discovery, where a bare `up == 0` matches nothing). It used to be spelled
-    # `noDataState: Alerting` — a Grafana-MANAGED-alert field that Prometheus and
-    # vmalert reject on their strict unmarshal, taking the WHOLE file down with it
-    # (verified with promtool; see tests/test_deploy_alerts.py for the full schema
-    # guard). Every other rule wants an empty result to stay silent, which is the
-    # Prometheus default and needs no field at all.
+    # discovery, where a bare `up == 0` matches nothing). A Grafana-style
+    # `noDataState` field would make Prometheus and vmalert reject the WHOLE file
+    # (see tests/test_deploy_alerts.py for the schema guard). Every other rule wants an
+    # empty result to stay silent, which is the Prometheus default.
     down = [r for r in rules if r.get("alert") == "curator-down"]
     assert len(down) == 1
     assert down[0]["expr"] == 'up{job="curator"} == 0 or absent(up{job="curator"})'

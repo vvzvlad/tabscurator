@@ -18,7 +18,7 @@ from src.app import create_app
 from src.db.actions import insert_action
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -27,10 +27,9 @@ AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **over)
 
@@ -111,8 +110,8 @@ def _seed_tab(db_path, instance_id, tab_id, url):
 
 def _connect_fresh(client, db_path, instance_id="i1", session="sess-1", tabs=None):
     """hello + answer the initial snapshot_request so the instance is FRESH."""
-    # Secret-based hello (issue #35): the instance must be an APPROVED active row first
-    # (what Task E does), else the hello resolves to no instance and is rejected.
+    # Secret-based hello: the instance must be an enrolled active row first, else the
+    # hello resolves to no instance and is rejected.
     approve_instance(db_path, instance_id)
     ws = client.websocket_connect("/ext").__enter__()
     ws.send_json(_hello(instance_id=instance_id, session=session))
@@ -360,7 +359,7 @@ def test_exemptions_are_written_before_the_open_tab_command(tmp_path):
 
     The test freezes the moment the ``open_tab`` command is on the wire, BEFORE any
     response, and reads the DB: both sides' exemptions must already be committed.
-    Reddens if the exemption write moves back after the command."""
+    Fails if the exemption write moves after the command."""
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
@@ -465,13 +464,12 @@ def test_restore_waits_for_a_pass_snapshot_instead_of_clobbering_it(tmp_path):
 def test_failed_open_is_a_clean_error_and_rolls_the_exemption_back(tmp_path):
     """The extension is wedged: ``open_tab`` times out.
 
-    Two things must not happen. (1) A 500 — ``CommandError`` is not an ``HTTPException``
-    and ``create_app`` only renders the latter, so it used to escape as an unhandled
-    error. (2) A two-hour exemption earned by an action that never took place: the
-    exemption is written BEFORE the open (deliberately, so a CRASH cannot leave a
-    reopened tab unprotected), and a normal command failure is the other case — the tab
-    is not back, so the protection must not stand. Otherwise "restore failed" silently
-    takes that URL out of curation for ``RESTORE_EXEMPTION_MIN``.
+    Two things must not happen. (1) A 500: ``CommandError`` is not an ``HTTPException``
+    and ``create_app`` only renders the latter. (2) A two-hour exemption earned by an
+    action that never took place: the exemption is written BEFORE the open (so a CRASH
+    cannot leave a reopened tab unprotected), and on a normal command failure the tab is
+    not back, so the protection must not stand. Otherwise "restore failed" silently takes
+    that URL out of curation for ``RESTORE_EXEMPTION_MIN``.
     """
     app = create_app(_settings(tmp_path, cmd_timeout_ms=300))
     db_path = str(tmp_path / "curator.db")
