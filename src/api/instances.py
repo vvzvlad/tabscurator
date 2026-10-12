@@ -106,7 +106,7 @@ async def merge_windows(app, instance_id: str, params: dict | None = None,
         cmd_timeout_ms=settings.cmd_timeout_ms,
         initiator=initiator,
         auth_ctx=auth_ctx,
-        # #47: the MCP tool may pin the session it read; the HTTP button passes None
+        # The MCP tool may pin the session it read; the HTTP button passes None
         # (the human is at the keyboard now, stamp the live session as before).
         expected_session=expected_session,
     )

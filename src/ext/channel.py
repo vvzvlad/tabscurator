@@ -46,16 +46,10 @@ _FIRST_FRAME_TIMEOUT_S = 10
 # fleet's RECONNECTS refused indefinitely — every instance falls out of curation while the
 # alerts read "absent", and it costs the attacker no credential at all.
 #
-# A second, SMALLER hard ceiling on silent sockets does NOT fix this, and it is worth
-# writing down why, because it is the obvious move: since a reconnect is also silent at
-# handshake time (it has to be accepted before it can send its hello), the smaller ceiling
-# would refuse reconnects too — at a QUARTER of the connection rate. It makes the same
-# attack four times cheaper.
-#
-# What actually separates the two is TIME, which is the one thing a flood cannot fake: a
-# real client sends its first frame within a round-trip of the handshake, while a flood's
-# whole leverage is holding the slot for the full timeout. So the quota governs the
-# TIMEOUT rather than admission: once at or above a quarter of the ceiling is occupied by
+# A smaller hard ceiling on silent sockets would refuse reconnects too (a reconnect is
+# silent until accepted), making the attack cheaper. What separates them is TIME: a real
+# client sends its first frame within a round-trip, while a flood's leverage is holding
+# the slot for the full timeout. So the quota governs the TIMEOUT rather than admission: once at or above a quarter of the ceiling is occupied by
 # sockets that have not spoken, newly accepted sockets get one second instead of ten to
 # say something. Nobody is refused, a speaker is never affected, and the connection rate
 # an attacker needs to hold the ceiling rises by the same factor as the timeout shrinks
@@ -92,7 +86,7 @@ def first_frame_timeout_s(silent_count: int, preauth_max: int) -> float:
 
 # install_uuid (recorded on the instances row) and the raw secret (which the server hashes
 # into the NOT-NULL secret_hash credential) are the LARGEST unbounded fields a hostile peer
-# with a valid window code could push into the DB (§36), so they get their own ceilings.
+# with a valid window code could push into the DB, so they get their own ceilings.
 # They are NOT truncated — truncating a key or a credential silently corrupts identity — an
 # overlength value is a malformed frame (REJECT_PROTOCOL). A real raw secret is 64 hex chars
 # (32 bytes), a real UUID 36; the cap stays generous. The proposed ``instanceId`` needs no
@@ -103,16 +97,12 @@ _MAX_INSTALL_UUID = 200
 _MAX_SECRET = 128
 # The same ceiling on the HELLO path. A hello is authenticated, but "authenticated" only
 # means the peer holds an enrolled secret — it does not make the rest of the frame trusted,
-# and ``sessionId`` lands in the DB and from there on operator-facing surfaces (§36).
+# and ``sessionId`` lands in the DB and from there on operator-facing surfaces.
 # ``sessionId`` is IDENTITY, not display text: the mirror compares it verbatim against the
 # value later reported in snapshots, and a relocation stays live only while both endpoints'
 # sessions still match. Truncating it would silently corrupt those comparisons, so an
 # oversized/non-str session id is a malformed frame (REJECT_PROTOCOL) — the same rule
 # install_uuid / secret already follow.
-#
-# There used to be a ``title`` clamp beside it, for the display name a hello carried. The
-# name is the id now (§6), the id is assigned once at enrolment and a hello cannot change
-# it, so there is no client-supplied display text on this path left to clamp.
 _MAX_SESSION_ID = 200
 
 
@@ -184,8 +174,7 @@ async def ext_channel(websocket: WebSocket) -> None:
             await websocket.close(code=1011)
             return
 
-        # The first frame must arrive within a bounded time (§2 — previously
-        # unbounded), and that bound is compressed while silent sockets are over quota
+        # The first frame must arrive within a bounded time (§2), and that bound is compressed while silent sockets are over quota
         # (see first_frame_timeout_s). A timeout, malformed frame, or transport drop ends
         # the socket.
         try:
@@ -269,7 +258,7 @@ async def _handle_enroll(
     ``instances`` row there and then, under the ``instanceId`` the operator typed into the
     extension, and replies ``enroll_accepted{instanceId}``. There is no second step and no
     return to the console: the window with its short-lived code already answered "who may
-    connect", and approval existed only to assign the id, which the browser now brings.
+    connect", and the browser brings the id.
 
     On any gate failure it sends ``enroll_rejected{reason}`` and creates NOTHING. The
     socket is always closed afterwards; the client learns it is enrolled from THIS frame
@@ -320,8 +309,7 @@ async def _handle_enroll(
         )
     )
     # The id collision is decided authoritatively inside the write below, so nothing to
-    # pre-read — and the helper no longer takes a capacity flag at all (it used to, and the
-    # only caller pinned it to True, which made the branch dead and the docstring wrong).
+    # pre-read.
     reason = protocol.enroll_reject_reason(
         msg, settings.protocol_version, window_open, code_ok
     )
@@ -427,7 +415,7 @@ async def _handle_hello(
     a failing ``hello_ack`` and closed the socket). Authentication is by the per-install
     SECRET: the client sends the RAW ``secret`` over TLS; the channel hashes it server-side
     (:func:`queries.resolve_secret`) and matches the stored sha256, taking the
-    SERVER-assigned id from that row — the client no longer self-reports a trusted
+    SERVER-assigned id from that row — the client does not self-report a trusted
     instanceId, and the DB stores only the sha256, so a DB-only leak yields no usable
     credential.
     """

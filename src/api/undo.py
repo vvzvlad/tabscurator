@@ -156,9 +156,7 @@ def _write_pending_undo_close(
 ) -> int:
     """Journal the copy-close BEFORE the browser command, as ``pending`` (Фаза 16).
 
-    This close used to be the ONLY one in the system performed outside the journal:
-    it sent ``close_tab`` and then just ``DELETE FROM tabs``. The at-least-once
-    discipline the pass uses for its own closes applies here for the same reason — a
+    The at-least-once discipline the pass uses for its own closes applies here: a
     process death between a successful close and the completion write must not erase
     the evidence that a tab was closed.
 

@@ -45,30 +45,27 @@ export const MAP_KEY = "activityMap"; // chrome.storage.session — the activity
 export const SESSION_ID_KEY = "sessionId"; // chrome.storage.session — the epoch
 export const INSTALL_UUID_KEY = "installUuid"; // chrome.storage.local — survives sessions
 
-// --- Enrollment (§7, issue #35) --------------------------------------------
+// --- Enrollment (§7) --------------------------------------------------------
 // The per-install SECRET (32 random bytes, stored as hex) lives ONLY in this
 // profile's chrome.storage.local — never in the bundle. The RAW secret hex goes on the
 // wire over TLS (enroll_request + every hello, as `secret`) and as the /api Bearer; the
-// SERVER hashes it into the stored sha256 (option A — a DB-only leak yields no usable
-// credential). Absence of this key is the "needs-enroll" fact. When a quarantined instance
-// re-enrolls, the
-// FRESH secret is generated under INSTANCE_SECRET_PENDING_KEY and promoted over the
+// SERVER hashes it into the stored sha256 (a DB-only leak yields no usable credential).
+// Absence of this key is the "needs-enroll" fact. When a quarantined instance re-enrolls,
+// the FRESH secret is generated under INSTANCE_SECRET_PENDING_KEY and promoted over the
 // old one ONLY after the server accepts it (unknown_instance never wipes — see
 // connection.js), which is why the two keys are distinct.
 export const INSTANCE_SECRET_KEY = "instanceSecret"; // storage.local — the active secret (hex)
 export const INSTANCE_SECRET_PENDING_KEY = "instanceSecretPending"; // storage.local — re-enroll secret
-// The server-ASSIGNED instance id, learned from a successful hello_ack (the client no
-// longer self-reports a trusted id, §2). Durable so the popup/startpage can name the
+// The server-ASSIGNED instance id, learned from a successful hello_ack (the client does
+// not self-report its id, §2). Durable so the popup/startpage can name the
 // rule target + filter own tabs even while the MV3 worker is cold.
 export const INSTANCE_ID_KEY = "instanceId"; // storage.local — server-assigned id
-// Operator-entered settings that USED to live in instance.json. The address and the
-// instance NAME are per-profile now (a universal build has no generator to stamp them),
-// and the shared token is gone entirely (§7). The enroll CODE is the ~10-min window
+// Operator-entered settings. The address and the instance NAME are per-profile (a
+// universal build has no generator to stamp them). The enroll CODE is the ~10-min window
 // code the operator reads off /admin and types once to enrol.
 export const SERVICE_ADDRESS_KEY = "serviceAddress"; // storage.local — wss/ws service URL
-// The name this browser asks to be known by — and that is the WHOLE of it: the service
-// has no separate display title anymore, so this value becomes the `instances` PRIMARY
-// KEY verbatim on a successful enrol. Hence the charset below rather than free text: the
+// The name this browser asks to be known by: it becomes the `instances` PRIMARY KEY
+// verbatim on a successful enrol. Hence the charset below rather than free text: the
 // id travels into URLs, metric labels and the operator console.
 export const INSTANCE_NAME_KEY = "browserName"; // storage.local — the proposed instance_id
 // The charset/length the service enforces (src/ext/protocol.py INSTANCE_ID_RE). Checked
@@ -87,12 +84,6 @@ export const ENROLL_CODE_KEY = "enrollCode"; // storage.local — the window cod
 // enrolled, which the alarm already covers; recovery from a closed window is an operator
 // step (open a new one, type the new code), not a client retry.
 
-// There is no INSTALL_UUID_PREFIX_LEN anymore. It sized the installUuid prefix the
-// options page printed as "this install's identity", and that row is gone: /admin stopped
-// printing the uuid when the pending-request list went away (§6), so the prefix had
-// nothing left to be compared against and was one more line between the operator and the
-// four fields that actually do something. installUuid itself is untouched — the SW still
-// mints it (INSTALL_UUID_KEY above) and enroll_request still carries it.
 // Durable enrollment facts, the SINGLE source getEnrollState reads (the in-memory
 // helloAcked is useless at page open — the worker is cold). Shape:
 //   { requestPending: bool, approved: bool, quarantined: bool, lastVerdict: str|null }
@@ -100,12 +91,8 @@ export const ENROLL_STATE_KEY = "enrollState"; // storage.local — durable enro
 
 // The four enroll states getEnrollState resolves to (§7). Only these are authoritative
 // from the SW branch; actual connectivity stays with /api/state on the startpage.
-//
-// There is NO `pending` state. It meant "the service holds our request, an operator has
-// yet to click Approve", and that step is gone: an enroll_request is accepted or refused
-// on the spot, so the transition is needs-enroll → approved with nothing in between. A
-// refusal leaves the state at needs-enroll and surfaces its REASON instead — which is the
-// honest report, where "ожидает одобрения" over a refused attempt was not.
+// There is no `pending` state: an enroll_request is accepted or refused on the spot, and a
+// refusal leaves needs-enroll with its REASON surfaced.
 export const ENROLL_NEEDS = "needs-enroll"; // no secret yet, or the last attempt was refused
 export const ENROLL_APPROVED = "approved"; // enrolled: the service assigned this id
 export const ENROLL_REVOKED = "revoked"; // server said `revoked` — secret wiped
@@ -118,13 +105,9 @@ export const VERDICT_UNKNOWN = "unknown_instance";
 // The single JS & Debugger opt-in checkbox (§12): per-copy, default OFF, lives in
 // chrome.storage.local (survives a session, is set from the options page). It is
 // the AUTHORITATIVE runtime state — read fresh on every gated verb and reported in
-// `hello` — so a copied instance.json cannot smuggle the gate open. ONE checkbox
-// now gates BOTH execute_js/start_js AND the chrome.debugger (CDP) path (§12,
-// set_focus_emulation and later slices): the storage KEY keeps its historical name
-// `allowExecuteJs` on purpose — renaming it would reset every installed copy's
-// checkbox to OFF, since the key is read per-copy from chrome.storage.local. The
-// former separate `allowDebugger` key is gone (it gated nothing); migration v6 drops
-// its mirror column service-side.
+// `hello` — so a copied instance.json cannot smuggle the gate open. It gates BOTH
+// execute_js/start_js AND the chrome.debugger (CDP) path (§12). The key keeps the name
+// `allowExecuteJs`: renaming it would reset every installed copy's checkbox to OFF.
 export const ALLOW_EXECUTE_JS_KEY = "allowExecuteJs";
 // The last known /ext connection facts (§6 `get_connection_state`), kept in
 // chrome.storage.session: an MV3 worker dies between events, so an in-memory-only
@@ -175,8 +158,7 @@ export const CMD_WAIT_FOR = "wait_for";
 // querySelector and to the value assignment, never source spliced into a page eval — so it
 // carries NO execute_js checkbox and writes NO js_audit row. But it is a MUTATION (it writes
 // into the page AS THE USER), so the SERVICE side gates it behind the pause/stop switch, exactly
-// like navigate_tab — as it gates every verb that reaches the browser, the read-only fixed ones
-// (get_text/wait_for) included; the mutation is what sets set_input apart from those, not the gate.
+// like every verb that reaches the browser.
 export const CMD_SET_INPUT = "set_input";
 // Fixed-function click twin of set_input: `selector` is DATA fed to querySelector (never source
 // spliced into a page eval), so it carries NO execute_js checkbox and writes NO js_audit row. It
@@ -202,17 +184,15 @@ export const CMD_SCROLL_UNTIL = "scroll_until";
 //     and dies with the tab (reload/discard/close): ergonomics, not durability.
 export const CMD_START_JS = "start_js";
 export const CMD_POLL_JOB = "poll_job";
-// The first verb down the chrome.debugger (CDP) path (§12, wave 18). It toggles
+// A chrome.debugger (CDP) verb (§12). It toggles
 // `Emulation.setFocusEmulationEnabled`, which makes a BACKGROUND tab behave as focused
 // (no timer throttling) WITHOUT taking the screen from the human. STATEFUL by nature: the
 // emulation holds ONLY while the debugger stays attached, so enable = attach + command +
 // KEEP attached, and disable = command(false) + detach. Gated by the single JS & Debugger
 // checkbox (ALLOW_EXECUTE_JS_KEY) at the edge. It carries NO arbitrary code and writes NO
-// js_audit row — focus emulation exfiltrates nothing, it only fakes focus; a later
-// data-bearing CDP verb (screenshot / network) needs its own audit.
+// js_audit row — focus emulation exfiltrates nothing, it only fakes focus.
 export const CMD_SET_FOCUS_EMULATION = "set_focus_emulation";
-// WebSocket-frame capture (§12, wave 21) — the FIRST data-bearing verb down the
-// chrome.debugger path. `start_ws_capture` attaches the debugger and turns on `Network.*`
+// WebSocket-frame capture (§12) — a data-bearing verb down the chrome.debugger path. `start_ws_capture` attaches the debugger and turns on `Network.*`
 // event delivery so the extension buffers a tab's WS frames; `read_ws_frames` drains that
 // buffer to the agent; `stop_ws_capture` disables the domain and detaches. Because the
 // frames carry PAGE DATA out (a messenger's conversation — phones, sums, addresses), start
@@ -224,10 +204,7 @@ export const CMD_SET_FOCUS_EMULATION = "set_focus_emulation";
 export const CMD_START_WS_CAPTURE = "start_ws_capture";
 export const CMD_READ_WS_FRAMES = "read_ws_frames";
 export const CMD_STOP_WS_CAPTURE = "stop_ws_capture";
-// Wake a DISCARDED tab (issue #68): the browser unloaded it from memory to save RAM, so
-// every injecting/attaching verb answers the opaque "Cannot access contents of the page.
-// Extension manifest must request permission…" — a message that blames the manifest for a
-// tab that merely needs reloading. wake_tab reloads it (a reload re-materialises a discarded
+// Wake a DISCARDED tab (unloaded from memory, see ERR_TAB_DISCARDED). wake_tab reloads it (a reload re-materialises a discarded
 // tab) and waits for `status:complete`. A FIXED action, not arbitrary code — no execute_js
 // checkbox, no js_audit row (like navigate_tab). Answers {wasDiscarded} so the caller learns
 // whether it was a real wake or a plain reload of an already-live tab — wake_tab ALWAYS reloads,
@@ -255,19 +232,12 @@ export const WAIT_POLL_MS = 250;
 // navigate_tab's commit gate anyway (see `navigationCommitted` in commands.js for the hole
 // this closes). Expressed in polls, not milliseconds, because it is a count of OBSERVATIONS
 // the browser failed to produce, not a duration. Three is deliberate: one `tabs.get` round
-// trip is all a browser needs to expose `pendingUrl` or a `loading` status, so a navigation
-// that has really started shows itself long before the third one — while three quiet polls
-// (750 ms at WAIT_POLL_MS) stay a rounding error against the 30 s the caller may budget.
+// trip is all a browser needs to expose `pendingUrl` or a `loading` status, and three
+// quiet polls cost 750 ms at WAIT_POLL_MS.
 //
-// ⚠️ THAT LAST CLAIM IS ABOUT THE DEFAULT, NOT ABOUT EVERY CALLER: a SHORT `timeoutMs`
-// removes the grace silently. The gate opens on the THIRD poll and the first sits behind the
-// 250 ms pre-pause, so a deadline of 2×WAIT_POLL_MS or less can never reach it — measured,
-// 500 ms answers `matched:false` where 501 ms answers `matched:true` — and a deadline under
-// about four intervals leaves the CONDITION one or two polls once the gate does open (at
-// 999 ms it is tested at 750 and again at 999, the last sleep clamped to what remains). A
-// caller passing 300 is therefore back to the pre-grace behaviour, which is why
-// navigate_tab's MCP description says so too: the caller who picks the number is the one who
-// needs to know.
+// ⚠️ A short `timeoutMs` removes the grace: the first poll sits behind the 250 ms pre-pause,
+// so a deadline of 2×WAIT_POLL_MS or less never reaches the third poll (500 ms answers
+// `matched:false`, 501 ms `matched:true`). navigate_tab's MCP description says so too.
 export const WAIT_COMMIT_GRACE_POLLS = 3;
 
 // The extension's OWN ceiling on how long a wait may occupy this worker, independent of
@@ -275,11 +245,8 @@ export const WAIT_COMMIT_GRACE_POLLS = 3;
 // running its tick, and a wait longer than a minute would straddle a TICK_MS period.
 //
 // This is the HARD ceiling of the pair: the operator's EXECUTE_JS_MAX_TIMEOUT_MS (30 s by
-// default) is the knob, and `Settings` refuses a value above this number rather than
-// accepting it and quietly delivering 60 s — a config that silently means something else
-// than it says is worse than one that fails at startup. `tests/test_settings.py` pins the
-// two together the way `tests/test_ext_protocol.py` pins the CMD_/ERR_ strings, since
-// again there is no shared artifact the two languages could import.
+// default) is the knob, and `Settings` refuses a value above this number at startup.
+// `tests/test_settings.py` pins the two together (no shared artifact across languages).
 export const WAIT_MAX_TIMEOUT_MS = 60000;
 
 // --- Command error codes (§6) -----------------------------------------------
@@ -289,7 +256,7 @@ export const ERR_STALE_SESSION = "stale_session";
 export const ERR_PRECONDITION_FAILED = "precondition_failed";
 export const ERR_NO_SUCH_TAB = "no_such_tab";
 // The target tab EXISTS but the browser has DISCARDED it — unloaded it from memory to save
-// RAM (issue #68). It still answers `chrome.tabs.get` (with `discarded:true` and its url), so
+// RAM. It still answers `chrome.tabs.get` (with `discarded:true` and its url), so
 // it is NOT `no_such_tab`, and its url is usually http/https, so it is NOT the `precondition_failed`
 // "wrong scheme" either. Yet every injecting/attaching verb fails on it with the opaque "Extension
 // manifest must request permission…" — a message that blames the manifest for a tab that only needs

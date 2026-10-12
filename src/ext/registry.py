@@ -8,7 +8,7 @@ id + its ``sent_at``, and the heartbeat task handle.
 The hello handler decides evict-vs-reject and swaps the map entry while holding
 :attr:`Registry.lock`, so no second hello can interleave across the ``await
 old.close()`` of an eviction (§6). The registry is process-local — the "one
-writer" / single-process invariant of Фаза 2 already forbids >1 worker.
+writer" / single-process invariant already forbids >1 worker.
 """
 
 from __future__ import annotations

@@ -1,21 +1,19 @@
 // Options page logic (§7, §12): the enrollment settings + the JS & Debugger opt-in.
 //
 // Every setting lives in chrome.storage.local (per-profile, NEVER in the bundle):
-//   allowExecuteJs — the authoritative SINGLE JS & Debugger gate (§12), default OFF.
-//     One checkbox now gates BOTH execute_js/start_js and the chrome.debugger (CDP)
-//     path; the storage key keeps its historical name (renaming resets every copy to OFF)
-//   serviceAddress — the wss/ws service URL (the shared token is gone, §7)
+//   allowExecuteJs — the single JS & Debugger gate (§12), default OFF: it gates both
+//     execute_js/start_js and the chrome.debugger (CDP) path; renaming the key would
+//     reset every copy to OFF
+//   serviceAddress — the wss/ws service URL (§7)
 //   browserName    — the name this browser enrols under; it BECOMES the instance id
 //   enrollCode     — the ~10-min window code, submitted once to enroll
 // The enroll state is fetched from the SW's get_connection_state (durable-fact derived,
 // §7). Kept in an external module because the extension_pages CSP forbids inline scripts.
 //
-// Enrolment is ONE step (§6): a valid code into an open window enrols this browser on the
-// spot, under the name below. So this page is also where a REFUSAL is read — the admin
-// console has no list of refused attempts to look at — which is why the name is validated
-// here before anything is sent. Every refusal is shown AT the field it is about (the
-// input turns red and the line under it carries the reason); the page-level status row
-// is left for outcomes, so nothing is said twice.
+// Enrolment is one step (§6): a valid code into an open window enrols this browser under
+// the name below. A refusal is only visible here (the admin console has no list of
+// refused attempts), so the name is validated before sending, and every refusal is shown
+// at the field it is about; the page-level status row is for outcomes.
 //
 // Pure helpers are exported for unit tests; DOM wiring runs only in a document.
 
@@ -106,14 +104,9 @@ export function serviceAddressError(raw) {
   return "malformed";
 }
 
-// The refusal reason, spelled out for the operator — including what to type INSTEAD,
-// since the field no longer asks for a scheme. "Saved" is not an option for a rejected
-// address: silently keeping it would leave the field looking accepted.
-//
-// These are the lines that replaced the paragraph about schemes that used to sit above
-// the field: one sentence, shown in red UNDER the input that broke, and only when it
-// broke. Each one names wss:// — whatever went wrong, that is what the operator has to
-// end up with.
+// The refusal reason for a rejected address, shown in red under the input. Each one
+// names wss://, since that is what the operator has to end up with. A rejected address
+// is never saved.
 export function addressErrorText(code) {
   switch (code) {
     case "insecure":

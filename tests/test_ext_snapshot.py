@@ -19,11 +19,10 @@ async def _make_db(tmp_path):
 
 
 async def _register(db, instance_id, session_id, now):
-    # Enrollment (issue #35): hello_upsert is UPDATE-only and only bumps an ALREADY
-    # active row (a hello never creates one). Create the approved row first — the thing
-    # Task E's operator approval does — so the first hello returns conn_epoch=1 and a
-    # reconnect bumps it to 2. ON CONFLICT DO NOTHING so a repeat _register (reconnect)
-    # reuses the same row and its bumped epoch.
+    # hello_upsert is UPDATE-only and only bumps an ALREADY active row (a hello never
+    # creates one). Create the enrolled row first, so the first hello returns
+    # conn_epoch=1 and a reconnect bumps it to 2. ON CONFLICT DO NOTHING so a repeat
+    # _register (reconnect) reuses the same row and its bumped epoch.
     await db.write(
         lambda c: c.execute(
             "INSERT INTO instances (id, status, secret_hash, connected, conn_epoch) "
@@ -257,8 +256,7 @@ async def test_snapshot_session_id_obeys_the_same_rule_as_hello(tmp_path):
     The hello path refuses a non-str / >200-char ``sessionId`` outright, on the grounds
     that the mirror compares the value VERBATIM (a relocation stays live only while both
     endpoints' sessions match), so it may never be truncated or coerced. That is a claim
-    about the COLUMN — and `apply_snapshot` rewrites the very same column on every pass,
-    where it used to accept anything the frame carried.
+    about the COLUMN, and `apply_snapshot` rewrites the very same column on every pass.
 
     Here the frame is already authenticated and there is no socket to reject from inside a
     write transaction, so an unusable value is SKIPPED (the rule the tab/window loops
@@ -389,7 +387,7 @@ def test_heartbeat_two_consecutive_misses_disconnects():
     assert heartbeat_step(alive=False, misses=1) == (2, True)
 
 
-# --- UPDATE-only upsert / rejection invariants (§3, issue #35) ---------------
+# --- UPDATE-only upsert / rejection invariants (§3) --------------------------
 async def test_hello_upsert_is_update_only_and_returns_none_for_missing_row(tmp_path):
     # A hello for an id with NO instances row creates nothing and returns None (never
     # int(None)). Reverting _HELLO_UPSERT to its INSERT branch reddens the COUNT check.
@@ -521,13 +519,12 @@ async def test_enroll_instance_creates_an_active_row(tmp_path):
 
 
 async def test_enroll_instance_refuses_a_live_id_and_leaves_it_untouched(tmp_path):
-    """The ONE objection the removed approval step answered: an id already held by an
-    ACTIVE instance is refused, and that instance is not disturbed.
+    """An id already held by an ACTIVE instance is refused, and that instance is not
+    disturbed.
 
-    Reddens if the ``WHERE instances.status != 'active'`` guard is dropped — the upsert
+    Fails if the ``WHERE instances.status != 'active'`` guard is dropped: the upsert
     would then overwrite a live browser's credential with the newcomer's, silently
-    evicting it from the fleet. That is the failure mode the manual approval prevented,
-    and it is the reason this refusal is loud rather than a merge.
+    evicting it from the fleet. That is why this refusal is loud rather than a merge.
     """
     db = await _make_db(tmp_path)
     try:
@@ -561,9 +558,8 @@ async def test_enroll_instance_reclaims_a_revoked_id(tmp_path):
     """A REVOKED id can be taken again — the restore path for a revoked MAIN.
 
     Migration 2 retires every pre-enrolment row, so this reactivation is the only way MAIN
-    ever curates again; it used to be the ``_APPROVE_UPSERT`` an operator triggered, and
-    the semantics are carried over verbatim. Reddens if the guard is tightened to refuse
-    any existing id (MAIN would be permanently unrecoverable).
+    ever curates again. Fails if the guard is tightened to refuse any existing id (MAIN
+    would be permanently unrecoverable).
     """
     db = await _make_db(tmp_path)
     try:

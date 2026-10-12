@@ -21,11 +21,6 @@ TYPE_HELLO_ACK = "hello_ack"
 # the permission, so the service creates the ACTIVE row there and then and answers
 # `enroll_accepted{instanceId}`. A gated request is refused with
 # `enroll_rejected{reason}` and creates nothing.
-#
-# There is no `enroll_pending` anymore, and the frame is gone rather than kept as a
-# no-op: it was the client's evidence that a request existed in a list awaiting a
-# separate operator approval, and that list no longer exists. A client that still waits
-# for it would wait forever instead of noticing it is already enrolled.
 TYPE_ENROLL_REQUEST = "enroll_request"
 TYPE_ENROLL_ACCEPTED = "enroll_accepted"
 TYPE_ENROLL_REJECTED = "enroll_rejected"
@@ -104,7 +99,7 @@ CMD_SCROLL_UNTIL = "scroll_until"
 #     PAGE and dies with the tab (reload/discard/close): ergonomics, not durability.
 CMD_START_JS = "start_js"
 CMD_POLL_JOB = "poll_job"
-# The first verb down the chrome.debugger (CDP) path (§12, wave 18). Toggles
+# The first verb down the chrome.debugger (CDP) path (§12). Toggles
 # ``Emulation.setFocusEmulationEnabled`` so a BACKGROUND tab behaves as focused (no timer
 # throttling) without taking the screen from the human. STATEFUL: the emulation holds only
 # while the debugger stays attached, so enable = attach + command + KEEP attached, and
@@ -112,7 +107,7 @@ CMD_POLL_JOB = "poll_job"
 # extension edge, but carries NO arbitrary code and writes NO ``js_audit`` row — it only
 # fakes focus, exfiltrating nothing; a later data-bearing CDP verb needs its own audit.
 CMD_SET_FOCUS_EMULATION = "set_focus_emulation"
-# WebSocket-frame capture (§12, wave 21) — the FIRST data-bearing verb down the
+# WebSocket-frame capture (§12) — the data-bearing verb down the
 # chrome.debugger path. ``start_ws_capture`` attaches the debugger and turns on ``Network.*``
 # event delivery so the extension buffers a tab's WS frames; ``read_ws_frames`` drains that
 # buffer to the agent; ``stop_ws_capture`` disables the domain and detaches. Because the frames
@@ -126,7 +121,7 @@ CMD_SET_FOCUS_EMULATION = "set_focus_emulation"
 CMD_START_WS_CAPTURE = "start_ws_capture"
 CMD_READ_WS_FRAMES = "read_ws_frames"
 CMD_STOP_WS_CAPTURE = "stop_ws_capture"
-# Wake a DISCARDED tab (issue #68). The browser unloads an idle tab from memory to save RAM;
+# Wake a DISCARDED tab. The browser unloads an idle tab from memory to save RAM;
 # the tab still EXISTS (``chrome.tabs.get`` answers it, with ``discarded:true`` and its url) but
 # every injecting/attaching verb fails on it with the opaque "Extension manifest must request
 # permission…". ``wake_tab`` reloads it — a reload re-materialises a discarded tab — and waits for
@@ -154,8 +149,8 @@ CMD_SCREENSHOT = "screenshot"
 ERR_STALE_SESSION = "stale_session"
 ERR_PRECONDITION_FAILED = "precondition_failed"
 ERR_NO_SUCH_TAB = "no_such_tab"
-# The target tab EXISTS but the browser has DISCARDED it — unloaded it from memory to save RAM
-# (issue #68). It still answers ``chrome.tabs.get`` (``discarded:true`` + its url), so it is not
+# The target tab EXISTS but the browser has DISCARDED it — unloaded it from memory to save RAM.
+# It still answers ``chrome.tabs.get`` (``discarded:true`` + its url), so it is not
 # ``no_such_tab``; its url is usually http/https, so it is not the ``precondition_failed`` "wrong
 # scheme" either. But every injecting/attaching verb fails on it with the opaque "Extension manifest
 # must request permission…", which blames the manifest for a tab that only needs waking. Its OWN code
@@ -193,13 +188,9 @@ REJECT_PROTOCOL = "protocol"
 REJECT_AUTH = "auth"
 REJECT_INSTANCE = "instance"
 REJECT_DUPLICATE = "duplicate_instance"
-# There is no `origin` verdict anymore, and no `origin` anywhere. The check was
-# self-reported by the very client it was meant to vet, and the EXT_ALLOWED_ORIGINS
-# allow-list behind it is gone (see src/api/cors.py). The hello frame still CARRIES an
-# origin and the service ignores it entirely — neither compared nor stored. The ENROLL
-# path used to RECORD its frame's origin, as operator-facing evidence at approval time;
-# with approval gone there is no reader for it, so the enroll_request no longer carries
-# one either (a field nobody reads is how a contract drifts).
+# There is no `origin` verdict: an origin is self-reported by the very client it would
+# vet. The hello frame may CARRY an origin; the service ignores it (neither compared nor
+# stored).
 # hello verdicts the client acts on (§7): the secret matched a REVOKED row, or matched
 # no active/pending row at all (unknown — e.g. never approved, or deleted). The client
 # distinguishes these to decide whether to re-enroll (unknown) or stop (revoked).
@@ -224,9 +215,7 @@ ENROLL_BAD_ID = "bad_id"
 
 # The charset/length an instance id must satisfy — it becomes the ``instances`` PRIMARY
 # KEY and travels into URLs, metric labels and the console, so a pasted or fat-fingered
-# value must not become a permanent key. Lives HERE, in the pure module, because the
-# enrollment gate that applies it is now the /ext channel; it used to live in
-# src/api/admin.py next to the operator-assigned id of the retired approve endpoint.
+# value must not become a permanent key. Applied by the /ext enrollment gate.
 INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
@@ -261,10 +250,9 @@ def hello_reject_reason(
 ) -> str | None:
     """Validate a ``hello`` frame against config; return a reject reason or None.
 
-    Secret-based (§2, issue #35): authentication is by the per-install SECRET, which
-    the channel resolves to an active ``instances`` row (``secret_hash -> id``) BEFORE
-    calling this. There is no shared token and no self-reported instanceId anymore — the
-    id is server-assigned. So this pure helper only does the config-shaped checks that
+    Secret-based (§2): authentication is by the per-install SECRET, which the channel
+    resolves to an active ``instances`` row (``secret_hash -> id``) BEFORE calling this.
+    There is no shared token and no self-reported instanceId — the id is server-assigned. So this pure helper only does the config-shaped checks that
     do not need the DB or the registry:
 
     Order mirrors §6: protocol version (exact int equality, never a silent downgrade)
@@ -272,13 +260,7 @@ def hello_reject_reason(
     instance, a last-line ``REJECT_AUTH`` guard (the channel normally rejects a
     revoked/unknown secret with a more specific reason BEFORE reaching here).
     Duplicate-instance is NOT decided here — it needs the live registry — so it lives in
-    the channel.
-
-    There used to be a third check: ``origin`` against the ``EXT_ALLOWED_ORIGINS``
-    allow-list. It is gone. The value it compared is SELF-REPORTED by the peer being
-    vetted, so it never held against anything that was not already authenticated by the
-    secret; the allow-list's real consumer was ``/api/*`` CORS, and that was retired too
-    (:mod:`src.api.cors` carries the argument).
+    the channel. ``origin`` is not checked: it is self-reported by the peer being vetted.
     """
     if msg.get("protocolVersion") != protocol_version:
         return REJECT_PROTOCOL
@@ -299,11 +281,11 @@ def enroll_reject_reason(
     """Decide whether an ``enroll_request`` is refused by the CONFIG-shaped gates.
 
     Pure so the enroll gate is unit-testable without a socket or the DB. **Order is
-    load-bearing** (issue acceptance 2/3): protocol version first — the one check that
+    load-bearing**: protocol version first — the one check that
     needs neither the DB nor the window — then the WINDOW must be open, then the CODE must
     be correct. In particular a request with a missing/blank code at an OPEN window must be
     refused (``bad_code``) and write NO row, so the channel passes ``code_ok=False`` for a
-    missing/blank/mismatched code (acceptance 2).
+    missing/blank/mismatched code.
 
     * protocolVersion mismatch -> ``REJECT_PROTOCOL`` (same string as the hello path)
     * not ``window_open``      -> ``ENROLL_CLOSED``
@@ -323,15 +305,6 @@ def enroll_reject_reason(
        :func:`src.db.queries.enroll_instance` — ``ENROLL_ID_TAKEN`` is returned by the
        channel from that transaction's outcome, because a pre-read in its own transaction
        could never be authoritative against two browsers enrolling the same name at once.
-
-    This function used to take a ``has_capacity`` flag and own ``ENROLL_CAPACITY``, and its
-    docstring claimed every gate ran "BEFORE the channel writes any ``enroll_requests``
-    row". That stopped being true when the capacity decision moved into the write (a
-    pre-read in its own transaction could never be authoritative against racing enrolls):
-    the only caller passed ``has_capacity=True`` unconditionally, so the branch was dead
-    code and the documented order was the opposite of the real one. The parameter is gone
-    rather than left as a trap for the next reader — and with the pending list itself, so
-    is the capacity ceiling.
     """
     if msg.get("protocolVersion") != protocol_version:
         return REJECT_PROTOCOL

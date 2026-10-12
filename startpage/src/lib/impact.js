@@ -9,9 +9,8 @@
 //       switches curation off entirely;
 //   (c) some instance could not be counted, so the numbers are an under-report.
 //
-// Showing only (a) is how the editor came to print "Переселений: 0, закрытий: 0 —
-// требуется подтверждение": zeros, an armed confirm button, and not a word about the
-// reason — which was (b), by far the largest thing the system ever does.
+// Showing only (a) would print zeros next to an armed confirm button with no reason,
+// when the reason is (b), by far the largest thing the system ever does.
 //
 // The payload does not name the ground, so it is derived. `enables_drain` /
 // `disables_curation` describe the CANDIDATE rule set only (`enables_drain` is just

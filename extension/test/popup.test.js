@@ -574,9 +574,8 @@ describe("init: build -> preview -> save", () => {
   });
 
   it("a 409 whose body cannot be read does NOT arm the confirm (no zeros, no blind ok)", async () => {
-    // An unreadable 409 used to render "relocate 0, close 0" — zeros where the server
-    // refused BECAUSE the impact is non-zero — and arm a confirm for an impact nobody
-    // saw. The next click would then send confirm_impact:true blind.
+    // An unreadable 409 must not render "relocate 0, close 0" and arm a confirm for an
+    // impact nobody saw (the next click would send confirm_impact:true blind).
     const doc = fakeDoc();
     const { fetchFn, calls } = routedFetch({ relocations: 3, closures: 1 }, () =>
       textResp(409, "<html>502 from a proxy</html>"),
@@ -675,9 +674,8 @@ describe("init: build -> preview -> save", () => {
   });
 
   it("a FAILED preview never auto-confirms: save goes unconfirmed and the gate speaks", async () => {
-    // "Preview unavailable" used to still send confirm_impact:true — confirming an
-    // impact the human was never shown. Now the first save is unconfirmed and the
-    // server's 409 is what surfaces the impact.
+    // With "Preview unavailable" the first save is unconfirmed and the server's 409 is
+    // what surfaces the impact; confirm_impact:true is never sent for an unseen impact.
     const doc = fakeDoc();
     const { fetchFn, calls } = routedFetch(new Error("preview down"), (n) =>
       n === 1
@@ -756,10 +754,8 @@ describe("loadPopupContext (§7)", () => {
   });
 
   it("tells a REFUSED address apart from an absent one", async () => {
-    // The TLS gate resolves a refused address to null, exactly like an unset one, so the
-    // popup used to tell an operator who had typed `ws://host` that no address was
-    // configured — over a field they had filled in. `addressError` is what separates the
-    // two, and this is the third surface to read it (options + startpage already do).
+    // The TLS gate resolves a refused address to null, exactly like an unset one;
+    // `addressError` is what separates the two (options + startpage read it too).
     // Reddens if get_credential stops carrying it or the popup stops branching on it.
     const { loadPopupContext } = await import("../pages/popup.js");
     const chromeApi = {

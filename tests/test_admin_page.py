@@ -1,6 +1,6 @@
-"""``/admin`` HTML console (issue #36) — the cookie-session + CSP + CSRF layer over the
-#35 JSON API. Each test maps a numbered acceptance row and is written to REDDEN on the
-specific invariant it guards (noted inline).
+"""``/admin`` HTML console: the cookie-session + CSP + CSRF layer over the admin JSON
+API. Each test maps a numbered acceptance row and is written to fail on the specific
+invariant it guards (noted inline).
 
 * (1) GET /admin with no cookie AND no Bearer → the console is NOT served; the human is
       sent to /admin/login (303) with no ADMIN_TOKEN in the body. The JSON API under
@@ -114,15 +114,12 @@ def test_root_redirects_to_the_console(tmp_path):
 
 
 def test_admin_page_refuses_console_and_points_at_the_login_form(tmp_path):
-    """Acc 1, amended: the PAGE refuses by sending the human to the login form.
+    """The page refuses an anonymous hit by sending the human to the login form.
 
-    Both halves matter and fail differently. The gate half — reddens if GET /admin stops
-    calling require_admin (an anonymous hit would then receive the console HTML, which the
-    marker assertion catches even though the status would be 200). The usability half —
-    reddens if the refusal goes back to a bare 401, which is what an operator typing
-    https://…/admin into the address bar used to get: the plain text "admin authentication
-    required", with the login form one public URL away and reachable only from the console
-    JS, i.e. only for a console that had already loaded.
+    Gate half: fails if GET /admin stops calling require_admin (an anonymous hit would get
+    the console HTML, which the marker assertion catches even at status 200). Usability
+    half: fails if the refusal becomes a bare 401, which leaves an operator typing the URL
+    with no way to reach the login form.
     """
     app = create_app_for(tmp_path)
     with _tc(app) as client:
@@ -140,13 +137,11 @@ def test_admin_page_refuses_console_and_points_at_the_login_form(tmp_path):
 def test_admin_json_api_still_401s_and_never_redirects(tmp_path):
     """The redirect is confined to the HTML page; the JSON API keeps its flat 401.
 
-    A redirect is a fine answer for a person and a bad one for a program: ``fetch`` follows
-    by default, so a console whose session expired mid-session would receive the login HTML
-    where it expected its payload and would have to guess. Reddens if the redirect is moved
-    into ``require_admin`` (every /admin/* JSON route would inherit it), and — via the
-    Bearer case — if a rejected CREDENTIAL starts being answered with a page: that also
-    keeps #35 acc 6, an instance secret probing /admin getting the same 401 as an unknown
-    token, with no page to tell them apart by.
+    ``fetch`` follows redirects by default, so an expired console session would receive
+    the login HTML instead of its payload. Fails if the redirect is moved into
+    ``require_admin`` (every /admin/* JSON route would inherit it), and, via the Bearer
+    case, if a rejected credential is answered with a page: an instance secret probing
+    /admin must get the same 401 as an unknown token.
     """
     app = create_app_for(tmp_path)
     with _tc(app) as client:
@@ -239,10 +234,10 @@ def test_token_rotation_invalidates_cookie(tmp_path):
 
 # --- (5) logout drops the session server-side --------------------------------
 def test_logout_clears_the_browser_cookie_but_cannot_un_sign_it(tmp_path):
-    """Acc 5, restated for a SIGNED cookie. Server-side revoke no longer exists: nothing
-    is stored, so a copy someone already took stays valid until it expires. What logout
-    still guarantees is that THIS browser is logged out. The real revoke is rotating
-    ADMIN_TOKEN — pinned by the test below. Reddens if logout stops clearing the cookie."""
+    """Logout of a SIGNED cookie: nothing is stored server-side, so a copy someone already
+    took stays valid until it expires; logout guarantees only that THIS browser is logged
+    out. The real revoke is rotating ADMIN_TOKEN, pinned by the test below. Fails if logout
+    stops clearing the cookie."""
     app = create_app_for(tmp_path)
     with _tc(app) as client:
         _login(client)
@@ -285,18 +280,12 @@ def test_a_tampered_cookie_is_refused(tmp_path):
 
 # --- (6) the console renders as text, not markup -----------------------------
 def test_page_uses_textcontent_and_no_unbounded_client_string_reaches_it(tmp_path):
-    """Acc 6, in the shape the console has now.
+    """The page JS renders with textContent, and no unbounded client string reaches it.
 
-    The payload half of this test is gone WITH ITS SOURCE. The console used to print two
-    client-supplied strings verbatim — ``suggested_title`` and ``origin`` off a pending
-    enroll_request — so an unauthenticated peer could put ``<img src=x onerror=…>`` in
-    front of the operator, and the whole defence was the page's textContent discipline.
-    There is no pending list anymore (§6) and no free-text field behind it: the only
-    client-influenced value the console prints is the instance id, which the service
-    refuses unless it matches ``[A-Za-z0-9._-]{1,64}`` before the row is ever created.
-
-    The textContent contract is still pinned, because it is what keeps the NEXT field from
-    being a hole. Reddens if the page JS is switched to innerHTML anywhere.
+    The only client-influenced value the console prints is the instance id, which the
+    service refuses unless it matches ``[A-Za-z0-9._-]{1,64}``. The textContent contract is
+    still pinned so the next field is not a hole. Fails if the page JS uses innerHTML
+    anywhere.
     """
     app = create_app_for(tmp_path)
     with _tc(app) as client:
@@ -310,24 +299,15 @@ def test_error_detail_reaches_the_console_not_just_the_status(tmp_path):
     """A refusal carries a WRITTEN reason and the console must be able to print it.
 
     ``_http_exception`` (src/app.py) renders a dict ``detail`` as JSON and every other
-    ``detail`` as PLAIN TEXT. The console's ``apiSend`` used to read only
-    ``res.json().error``, so every string detail was lost to the failed parse and the
-    operator saw a bare "-> 409" — while the MAIN-revoke refusal spells out both what
-    revoking MAIN does and what it does NOT do (it cannot hand MAIN to another instance).
+    ``detail`` as PLAIN TEXT, e.g. the MAIN-revoke refusal explains what revoking MAIN does
+    and does not do. Both ``apiSend`` and ``apiGet`` must route the body through ONE helper
+    that reads it as text.
 
-    ``apiGet`` had the same hole for longer: it threw ``path + " -> " + res.status`` and
-    every ``render*`` call goes through it, so a degraded service showed
-    "/admin/instances -> 503" instead of the sentence the server sent. The extraction
-    therefore lives in ONE helper both wrappers call — the thing this test pins, because a
-    second copy is exactly how the two paths drifted apart the first time.
-
-    There is no JS harness for ``templates/app.js`` (it is a served static asset, not a
-    module — see the acc-6 test above for the same source-level style), so this pins the
-    two halves that must meet: the server really does put the sentence in a plain-text
-    body, and the SHIPPED page JS reads that body as text. Reddens if the detail is
-    swallowed on either side — in particular if the helper goes back to ``res.json()``
-    first, which consumes the body and makes any ``res.text()`` fallback unreachable, or
-    if either wrapper stops routing its refusal through the helper."""
+    There is no JS harness for ``templates/app.js`` (a served static asset, not a module),
+    so this pins both halves at the source level: the server puts the sentence in a
+    plain-text body, and the shipped page JS reads that body as text. Fails if the helper
+    calls ``res.json()`` first (which consumes the body and makes a ``res.text()`` fallback
+    unreachable), or if either wrapper stops routing its refusal through the helper."""
     app = create_app_for(tmp_path)
     db_path = str(tmp_path / "curator.db")
     with _tc(app) as client:
@@ -460,7 +440,7 @@ def test_the_countdown_timer_is_cleared_and_never_doubled(tmp_path):
 
 # --- (7) Bearer still opens everything, and beats an ambient cookie ----------
 def test_bearer_opens_admin_and_beats_cookie(tmp_path):
-    """Acc 7. Reddens if the #36 changes break the #35 Bearer path, or if an ambient cookie
+    """Acc 7. Fails if the cookie layer breaks the Bearer path, or if an ambient cookie
     downgrades a Bearer call into the CSRF-gated cookie branch."""
     app = create_app_for(tmp_path)
     with _tc(app) as client:
@@ -506,7 +486,7 @@ def test_session_expiry_unit(tmp_path):
 
 
 def test_session_expiry_through_request(tmp_path):
-    """An expired session no longer opens /admin through the real request path. Reddens if
+    """An expired session does not open /admin through the real request path. Fails if
     require_admin trusts a stale cookie."""
     app = create_app_for(tmp_path)
     with _tc(app) as client:
@@ -533,20 +513,18 @@ def test_wrong_token_login_rejected_no_cookie(tmp_path):
 
 
 def test_failed_login_counts_under_its_own_reason(tmp_path):
-    """A wrong ADMIN_TOKEN must be countable APART from "no session presented".
+    """A wrong ADMIN_TOKEN is counted APART from "no session presented".
 
-    ``admin_session`` ticks on every unauthenticated hit of the console — a browser opening
-    /admin before logging in produces one — so folding failed logins into it makes guessing
-    the credential that opens /admin, /api/* and /mcp unalertable: no threshold survives
-    the background noise and still catches a brute force. Reddens if login_submit goes back
-    to incrementing ``admin_session`` (the bad-token counter would stop moving and the
-    ambient one would move twice).
+    ``admin_session`` ticks on every unauthenticated hit of the console (a browser opening
+    /admin before logging in produces one), so folding failed logins into it would make a
+    brute force on the credential unalertable. Fails if login_submit increments
+    ``admin_session`` (the bad-token counter would stop moving and the ambient one would
+    move twice).
 
-    Half (b) is also what keeps the login redirect honest. Sending the anonymous page hit
-    to the login form did not make it a non-event: it is still a refusal and still counts,
-    under the AMBIENT label that carries no alert rule. Reddens in the other direction too
-    — if the redirect were ever counted as ``admin_bad_token``, every operator opening the
-    console cold would push the brute-force rule toward firing on nothing.
+    Half (b): the anonymous page hit redirected to the login form still counts as a
+    refusal, under the AMBIENT label that carries no alert rule. Counting it as
+    ``admin_bad_token`` would push the brute-force rule toward firing on every operator
+    opening the console cold.
     """
     from src.api.admin_page import ADMIN_BAD_TOKEN_REASON
     from src.api.auth_metrics import auth_rejections
@@ -570,13 +548,12 @@ def test_failed_login_counts_under_its_own_reason(tmp_path):
 
 # --- pre-auth body ceiling ---------------------------------------------------
 def test_login_body_is_capped(tmp_path):
-    """``POST /admin/login`` is the service's only PRE-AUTH body, and it was unbounded.
+    """``POST /admin/login`` is the service's only PRE-AUTH body, and it is capped.
 
     It cannot sit behind ``require_admin`` (it is how one authenticates) and neither the
     app nor uvicorn imposes a size limit, so ``await request.json()`` would buffer whatever
-    an anonymous peer sent — the cheapest possible way to spend the process's memory.
-    Reddens if the cap is removed: the 1 MiB post below turns back into a 401 (i.e. it was
-    read in full first).
+    an anonymous peer sent. Fails if the cap is removed: the 1 MiB post below turns into a
+    401 (i.e. it was read in full first).
     """
     app = create_app_for(tmp_path)
     with _tc(app) as client:
@@ -609,19 +586,16 @@ def test_login_body_is_capped(tmp_path):
 def test_bounded_body_binds_every_later_reader():
     """The ceiling must hold for whoever reads the body NEXT, not just for this call.
 
-    ``read_bounded_body`` stashes its buffer in Starlette's PRIVATE ``Request._body`` —
-    the same attribute ``Request.body()`` reads and writes — because Starlette exposes no
-    public equivalent (no setter, no "already read" hook). That coupling is the thing an
-    upgrade can break SILENTLY: the guard would keep returning 413s while every later
-    reader went back to the wire, and no existing test would notice. So both directions are
-    pinned here, against the real ASGI stack rather than a hand-built Request:
+    ``read_bounded_body`` stashes its buffer in Starlette's PRIVATE ``Request._body`` (the
+    attribute ``Request.body()`` reads and writes), because Starlette exposes no public
+    equivalent. A Starlette upgrade can break that silently, so both directions are pinned
+    against the real ASGI stack:
 
     * accepted body -> ``request.body()`` returns THAT buffer (if the stash stopped being
-      honoured, this raises "Stream consumed" instead — loud, not silent);
-    * refused body -> a later read yields nothing. The declared-Content-Length branch is
-      the sharp one: it returns before touching the stream, so without a sticky refusal the
-      next ``request.body()`` happily buffered the whole oversized body (measured: 1000
-      bytes past a 64-byte limit) and the ceiling bounded nothing at all.
+      honoured, this raises "Stream consumed");
+    * refused body -> a later read yields nothing. The declared-Content-Length branch
+      returns before touching the stream, so without a sticky refusal the next
+      ``request.body()`` would buffer the whole oversized body.
     """
     from starlette.applications import Starlette
     from starlette.exceptions import HTTPException
@@ -661,21 +635,16 @@ def test_bounded_body_binds_every_later_reader():
 def test_a_refusal_does_not_destroy_a_body_someone_else_already_read():
     """The already-buffered branch RE-CHECKS a buffer; it must never wipe it.
 
-    Sticky-on-refusal exists for the branches that leave the wire readable — it stops a
-    later reader from going back and buffering the body this call refused. On the branch
-    where the body is already in ``Request._body`` there is no wire left to protect (the
-    stream is drained), and the buffer belongs to whoever read it first: pinning it to
-    ``b""`` there deleted a valid body before anyone had even decided whether to catch the
-    413. Harmless only for as long as the single caller keeps letting the exception fly.
+    Sticky-on-refusal exists for the branches that leave the wire readable. When the body
+    is already in ``Request._body`` the stream is drained and the buffer belongs to
+    whoever read it first, so it must survive a 413 a caller might catch.
 
-    Both outcomes of that branch are pinned, on the real ASGI stack rather than a hand-built
-    Request, because they fail differently:
+    Both outcomes of that branch are pinned on the real ASGI stack:
 
-    * a LEGAL pre-read body (within the limit) is handed back BYTE-FOR-BYTE and is still
-      there for the next reader — an unconditional wipe on this branch would be invisible
-      to the 413 case alone;
-    * an oversized one still answers 413, and the buffer survives it — reddens the moment
-      the wipe is put back on this branch, ``second`` dropping to 0.
+    * a LEGAL pre-read body (within the limit) is handed back byte-for-byte and is still
+      there for the next reader;
+    * an oversized one still answers 413, and the buffer survives it (``second`` would
+      drop to 0 if this branch wiped it).
 
     Both bodies are sent CHUNKED (no ``Content-Length``) so the header check cannot short-
     circuit them and the already-buffered branch is really the one under test.
@@ -759,7 +728,7 @@ def test_admin_responses_are_never_cached(tmp_path):
             assert resp.headers["cache-control"] == "no-store"
 
 
-# --- framing defenses + nosniff (review round) -------------------------------
+# --- framing defenses + nosniff ----------------------------------------------
 def test_admin_html_and_assets_carry_frame_defenses(tmp_path):
     """The authenticated console page AND its assets carry the CSP (incl. frame-ancestors
     'none'), X-Frame-Options: DENY and nosniff. Reddens if the clickjacking defenses are
@@ -783,16 +752,14 @@ def test_admin_html_and_assets_carry_frame_defenses(tmp_path):
 
 
 def test_admin_json_carries_nosniff(tmp_path):
-    """Every /admin JSON response carries X-Content-Type-Options: nosniff. Reddens if the
-    header middleware stops covering the JSON API — without changing the JSON body. The
-    bodies no longer carry free-text client input, but the header is what keeps the next
-    field added to them from being a MIME-sniffing hole."""
+    """Every /admin JSON response carries X-Content-Type-Options: nosniff. Fails if the
+    header middleware stops covering the JSON API, without changing the JSON body."""
     app = create_app_for(tmp_path)
     with _tc(app) as client:
         r = client.get("/admin/instances", headers=admin_headers())
         assert r.status_code == 200
         assert r.headers["x-content-type-options"] == "nosniff"
-        # Body/behavior of the #35 JSON is unchanged.
+        # Body/behavior of the admin JSON is unchanged.
         assert "instances" in r.json()
 
 

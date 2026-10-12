@@ -1,8 +1,8 @@
 """``POST /api/instances/:id/merge_windows`` (§9, §10) — the manual «слить окна сейчас».
 
 §9 keeps the button next to the automatic step-9 merge («для случая, когда ждать час не
-хочется»); §10's table pins the answer to ``{merged}``, "immediately". The MCP tool
-existed and the HTTP twin did not, so the startpage button had nothing to call.
+хочется»); §10's table pins the answer to ``{merged}``, "immediately". This is the HTTP
+twin of the MCP tool, called by the startpage button.
 
 The websocket plays the extension: it receives the ``merge_windows`` command and answers
 with the count of tabs it moved.
@@ -25,7 +25,7 @@ from starlette.testclient import TestClient
 from src.app import create_app
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -34,10 +34,9 @@ AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{
             "cmd_timeout_ms": 1500,
@@ -56,7 +55,7 @@ def _q_one(db_path, sql, params=()):
 
 
 def _connect(client, instance_id="prox", session="sess-1", db_path=None):
-    # Secret-based hello (issue #35): approve the instance (Task E) before it can hello.
+    # Secret-based hello: the instance must be enrolled before it can hello.
     approve_instance(db_path, instance_id)
     ws = client.websocket_connect("/ext").__enter__()
     ws.send_json({

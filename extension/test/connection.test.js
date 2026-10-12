@@ -16,11 +16,9 @@ const SECRET_HEX = "01".repeat(32);
 const APPROVED_FACTS = { requestPending: false, approved: true, quarantined: false, lastVerdict: null };
 
 // hello/enroll read the secret from storage (several async ticks), so the opening frame
-// lands a few macrotasks later than the old token-only path — and "a few" is not a number
-// this file may guess at. `settle()` drains the mock until it reports nothing in flight,
-// so the wait is as long as the machine needs and no longer; a fixed sleep asserted on a
-// half-written chain whenever the box was busy. Nothing under extension/src schedules a
-// timer of its own, so the mock's queue is the complete picture of the pending work.
+// lands a few macrotasks later. `settle()` drains the mock until it reports nothing in
+// flight instead of guessing a fixed sleep. Nothing under extension/src schedules a timer
+// of its own, so the mock's queue is the complete picture of the pending work.
 const flush = () => settle();
 
 // Seed an ENROLLED profile (secret + approved) so the socket opens and hello is sent.
@@ -262,7 +260,7 @@ describe("hello carries the capability report", () => {
       type: "hello",
       extVersion: "9.9.9", // from the mock's chrome.runtime.getManifest()
     });
-    // The retired second checkbox no longer rides the frame.
+    // There is no separate debugger checkbox on the frame.
     expect(conn.ws.sent[0].allowDebugger).toBeUndefined();
   });
 
@@ -293,7 +291,7 @@ describe("ensureSocket idempotence (§6)", () => {
 });
 
 // ============================================================================
-// Enrollment (§7, issue #35)
+// Enrollment (§7)
 // ============================================================================
 
 // A bare env (stubbable crypto) around the current chrome mock.
@@ -345,15 +343,10 @@ describe("enroll_request frame (§6/§7)", () => {
       code: "WIN-CODE",
       secret: SECRET_HEX,
       installUuid: conn.installUuid,
-      // ONE name for one thing: the field IS the instance id the service will assign
-      // (§6). It used to be `title`, a display name paired with an id the operator typed
-      // separately into the console — two names for a browser that is never renamed.
+      // The field IS the instance id the service will assign (§6).
       instanceId: "bobs-chrome",
     });
-    // Neither the old display-name spellings nor `origin` ride along. The frame used to
-    // carry `title` AND `suggestedTitle` "to be safe", and an `origin` whose only reader
-    // was the pending row an operator inspected before approving. All three are gone: a
-    // field nobody reads is how a contract drifts.
+    // No `title`, `suggestedTitle` or `origin`: a field nobody reads is how a contract drifts.
     expect(req.title).toBeUndefined();
     expect(req.suggestedTitle).toBeUndefined();
     expect(req.origin).toBeUndefined();
@@ -411,12 +404,8 @@ describe("enroll_request frame (§6/§7)", () => {
     // The operator pressed submit while the service was down: the forced reconnect never
     // opened, so the enroll_request never went out. The next opening frame must be the
     // enroll_request, not a hello that can only ever answer `unknown_instance`.
-    //
-    // The old client re-sent only while `requestRegisteredAt === null`, because a
-    // confirmed request was waiting in an operator's list and re-registering it was
-    // pointless churn. Nothing waits anywhere now, so the condition collapses to "a code
-    // is staged and we are not enrolled", and the resend costs exactly one frame that is
-    // answered immediately.
+    // The condition is "a code is staged and we are not enrolled"; the resend costs one
+    // frame that is answered immediately.
     await chrome.storage.local.set({
       enrollCode: "WIN-CODE",
       browserName: "bobs-chrome",

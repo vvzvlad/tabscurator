@@ -2,11 +2,10 @@
 
 Pure-core only — everything here runs on Linux/CI without a browser or a mac.
 
-Under enrollment (§7/§13, issue #35/#37) an instance is a THIN wrapper: `generate` no
-longer copies the extension or writes an `instance.json`. It only builds an empty
-`--user-data-dir` and a `.app` whose launcher `--load-extension`s the SHARED universal
-bundle built once by `instancegen bundle`. The service address and the per-install secret
-are entered per profile during enrollment, so `generate` takes no token and no serviceUrl.
+An instance is a THIN wrapper: `generate` builds only an empty `--user-data-dir` and a
+`.app` whose launcher `--load-extension`s the SHARED universal bundle built once by
+`instancegen bundle`. The service address and the per-install secret are entered per
+profile during enrollment, so `generate` takes no token and no serviceUrl.
 
 The `bundle` build (a universal, key-free, instance.json-free copy) is covered in
 `tests/test_enroll_metrics_and_bundle.py`. Operational acceptance (an instance actually
@@ -72,14 +71,12 @@ def _tiny_repo_extension(root: Path, *, commits: int = 1) -> Path:
     """A real, NON-shallow git repo with an `extension/` bundle inside it.
 
     Every test that asserts on a real build stamp owns its repository instead of reading
-    the project's own `extension/`, because THE SHAPE OF THIS PROJECT'S CLONE MUST NOT
-    DECIDE WHETHER THE ASSERTION RUNS. `cli.build_stamp` degrades to "no stamp" on a
-    shallow clone on purpose (there `rev-list --count HEAD` answers 1 and the version
-    would come out confidently wrong), and `actions/checkout` clones with `fetch-depth: 1`
-    — so against `REPO_EXTENSION` there is legitimately no stamp in CI, and the assertions
-    would either die on a missing stamp or have to be skipped in exactly the
-    environment that matters most. A repo built here is non-shallow by construction and
-    its commit count is the test's own choice.
+    the project's own `extension/`, because the shape of this project's clone must not
+    decide whether the assertion runs. `cli.build_stamp` degrades to "no stamp" on a
+    shallow clone on purpose (there `rev-list --count HEAD` answers 1), and
+    `actions/checkout` clones with `fetch-depth: 1`, so against `REPO_EXTENSION` there is
+    no stamp in CI. A repo built here is non-shallow and its commit count is the test's
+    own choice.
 
     It is a real repo rather than a stub because the `-dirty` marker is about what git
     reports for a real working tree.
@@ -121,7 +118,7 @@ def _tiny_repo_extension(root: Path, *, commits: int = 1) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# generate writes NO extension copy and NO instance.json (issue #37, acc 3)
+# generate writes NO extension copy and NO instance.json
 # --------------------------------------------------------------------------- #
 def test_generate_writes_no_extension_copy_and_no_instance_json(tmp_path):
     bundle = _make_bundle(tmp_path)
@@ -194,7 +191,7 @@ def test_bad_bundle_dir_on_overwrite_does_not_destroy_the_existing_app(tmp_path)
 
 
 # --------------------------------------------------------------------------- #
-# Two instances share ONE bundle dir, own separate profiles (issue #37, acc 4)
+# Two instances share ONE bundle dir, own separate profiles
 # --------------------------------------------------------------------------- #
 def test_two_instances_point_at_the_same_bundle_dir(tmp_path):
     bundle = _make_bundle(tmp_path)
@@ -345,7 +342,7 @@ def test_stamp_build_identity_strips_an_inherited_version_name():
     "bad",
     [
         "0.1.65536",       # component over the spec maximum
-        "0.1.130.65536",   # …and over it in the new FOURTH component
+        "0.1.130.65536",   # …and over it in the FOURTH component
         "0.1.032",         # leading zero on a non-zero component
         "0.1.130.0932",    # leading zero in the build-minute component
         "0.0.0.0",         # all zero
@@ -374,8 +371,8 @@ def test_stamp_build_identity_accepts_the_spec_edges():
 
 
 def test_copy_bundle_without_a_stamp_is_still_verbatim(tmp_path):
-    # The no-regression pin: every existing caller passes no stamp and must keep getting a
-    # byte-identical manifest. Redden: stamp unconditionally in copy_bundle.
+    # A caller that passes no stamp gets a byte-identical manifest. Redden: stamp
+    # unconditionally in copy_bundle.
     out = tmp_path / "dist"
     core.copy_bundle(REPO_EXTENSION, out)
     assert (out / "manifest.json").read_bytes() == (REPO_EXTENSION / "manifest.json").read_bytes()
@@ -397,13 +394,10 @@ def test_copy_bundle_stamps_the_output_and_never_the_repo(tmp_path):
 
 def test_copy_bundle_validates_the_version_before_copying_anything(tmp_path):
     # EVERY argument check must run BEFORE shutil.copytree. `version` is validated inside
-    # stamp_build_identity, which runs AFTER the copy — so copy_bundle validates it up
+    # stamp_build_identity, which runs AFTER the copy, so copy_bundle validates it up
     # front too, or an illegal version would leave a complete but UNSTAMPED bundle at
-    # --out and the retry would have to fight the leftovers with --force. (This replaces
-    # the old "version and version_name must be given together" pairing check: with
-    # version_name gone there is no pair left, but the copy-nothing-before-validating
-    # property it protected is the same one asserted here.) Redden: move the
-    # validate_manifest_version call back below copytree.
+    # --out and the retry would have to fight the leftovers with --force. Redden: move the
+    # validate_manifest_version call below copytree.
     out = tmp_path / "dist"
     with pytest.raises(ValueError, match="exceeds the maximum"):
         core.copy_bundle(REPO_EXTENSION, out, version="0.1.130.65536")
@@ -430,12 +424,9 @@ def test_cli_bundle_stamps_the_version(tmp_path):
     # components come from the tracked literal, a third component that is the commit count
     # and a fourth that is the build minute.
     #
-    # This builds a repo the TEST owns rather than REPO_EXTENSION, because the shape of
-    # THIS project's clone must not decide whether the assertion below runs. build_stamp
-    # degrades to no stamp on a shallow clone by design, and CI checks out with
-    # fetch-depth: 1 — so read against REPO_EXTENSION this test dies on a missing stamp in
-    # CI, and skipping instead would retire the format assertion in the one environment
-    # that publishes images. See _tiny_repo_extension.
+    # This builds a repo the TEST owns rather than REPO_EXTENSION: build_stamp degrades to
+    # no stamp on a shallow clone and CI checks out with fetch-depth: 1. See
+    # _tiny_repo_extension.
     ext = _tiny_repo_extension(tmp_path, commits=3)
     out = tmp_path / "dist"
     assert cli.main(["bundle", "--out", str(out), "--extension-dir", str(ext)]) == 0
@@ -465,16 +456,10 @@ def test_cli_bundle_stamps_the_version(tmp_path):
 
 
 def test_cli_bundle_writes_no_version_name_and_a_short_version(tmp_path):
-    # THE defect this scheme fixes. brave://extensions renders `version_name` when present,
-    # and it renders it in the slot BESIDE THE EXTENSION NAME — a slot with roughly ten
-    # characters of room. The 35-character human-readable stamp that used to live there
-    # («0.1.135 · edd7787 · 2026-08-07 20:58») wrapped to two lines and truncated the name
-    # itself, so the card read «arcextens... 0.1.135 · edd7787 · 2026-08-07 20:58» while
-    # every neighbouring extension showed its full name and a compact version. With no
-    # `version_name` the page falls back to `version` ("if no version_name is present, the
-    # version field will be used for display purposes as well"). Redden: re-add
-    # `version_name` to the stamp — which would silently truncate the name again, with no
-    # other test noticing.
+    # brave://extensions renders `version_name` when present, in the slot BESIDE THE
+    # EXTENSION NAME with roughly ten characters of room; a longer string truncates the
+    # name. With no `version_name` the page falls back to `version`. Redden: re-add
+    # `version_name` to the stamp.
     ext = _tiny_repo_extension(tmp_path, commits=3)
     out = tmp_path / "dist"
     assert cli.main(["bundle", "--out", str(out), "--extension-dir", str(ext)]) == 0
@@ -552,10 +537,9 @@ def test_build_stamp_returns_none_outside_a_git_repo(tmp_path, capsys):
 def test_build_stamp_degrades_when_the_manifest_is_not_a_json_object(tmp_path, capsys):
     # A manifest.json that is valid JSON but NOT an object (an array, a string, null) must
     # reach the same fallback as a missing git. `manifest["version"]` on a list raises
-    # TypeError, which is not in build_stamp's except tuple — so before the explicit check
-    # this killed the build with a traceback, and it used to build fine (copy_bundle only
-    # requires manifest.json to BE a file). Redden: index the parsed JSON before the
-    # isinstance check.
+    # TypeError, which is not in build_stamp's except tuple, and copy_bundle only requires
+    # manifest.json to BE a file. Redden: index the parsed JSON before the isinstance
+    # check.
     src = tmp_path / "extension"
     src.mkdir()
     (src / "manifest.json").write_text('["not", "an", "object"]', encoding="utf-8")
@@ -568,8 +552,7 @@ def test_build_stamp_degrades_when_the_manifest_is_not_a_json_object(tmp_path, c
 
 
 def test_cli_bundle_survives_a_manifest_that_is_not_a_json_object(tmp_path, capsys):
-    # …and the whole build still succeeds, producing the verbatim copy it produced before
-    # the stamp existed. This is the REGRESSION the type check prevents.
+    # …and the whole build still succeeds, producing the verbatim (unstamped) copy.
     src = tmp_path / "extension"
     src.mkdir()
     (src / "manifest.json").write_text('["not", "an", "object"]', encoding="utf-8")
@@ -708,13 +691,12 @@ def test_launcher_targets_brave_with_per_instance_flags(tmp_path):
 
 
 def test_launcher_without_extension_sync_is_byte_identical(tmp_path):
-    """The no-sync launcher is EXACTLY the script this generator has always emitted.
+    """The no-sync launcher is pinned byte-for-byte.
 
-    A no-regression pin, deliberately byte-for-byte: `--no-sync-extensions` (and every
-    caller that passes no sync dir at all) must keep producing the old launcher, so the
-    extension-sync feature cannot leak a single character into it. Redden: change any
-    byte of `render_launcher_script`'s non-sync output — including its comment header,
-    which is why the sync explanation lives inside the sync-only prologue instead.
+    `--no-sync-extensions` (and every caller that passes no sync dir at all) must not get
+    a single character of the extension-sync feature. Redden: change any byte of
+    `render_launcher_script`'s non-sync output, including its comment header, which is
+    why the sync explanation lives inside the sync-only prologue instead.
     """
     assert core.render_launcher_script("/bin/brave", "/p", "/e", ["--foo"]) == (
         "#!/bin/sh\n"
@@ -794,10 +776,8 @@ def _fake_main_profile(tmp_path) -> Path:
     Two entries are deliberately degenerate:
 
     * `.hidden/` is a hidden DIRECTORY carrying a perfectly good manifest, and it must
-      still not be loaded — POSIX `*` never expands to a leading dot, so `"$MAIN"/*/`
-      never yields it. That is why the launcher's `case` needs no `.*` branch: a branch
-      for it would be dead code (the `.DS_Store` this fixture used to plant could not
-      have reached it either, being a FILE that `*/` cannot match).
+      still not be loaded: POSIX `*` never expands to a leading dot, so `"$MAIN"/*/`
+      never yields it, and the launcher's `case` needs no `.*` branch.
     * `zzz-nomanifest/` has a version dir with NO manifest.json, and is named to sort
       LAST under every collation (`z` follows both `T`/`Temp` and every other id in C and
       in en_US.UTF-8). So the id whose manifest check fails is always the loop's FINAL
@@ -850,12 +830,11 @@ def test_launcher_loads_main_profile_extensions_newest_version_by_mtime(tmp_path
 def test_launcher_falls_back_when_the_newest_version_dir_has_no_manifest(tmp_path, shell):
     """One unloadable version dir must not drop the extension — the sibling next to it wins.
 
-    This is a REAL state, not a hypothetical: the main browser garbage-collecting an old
-    version deletes the files inside that dir, which RAISES its mtime above the live one,
-    so for a moment the newest dir on disk is a manifest-less husk (a browser killed
-    mid-cleanup leaves it that way permanently). Taking only the first candidate meant the
-    extension — as likely Bitwarden as anything else — was absent from the instance
-    entirely, with nothing said anywhere.
+    This is a real state: the main browser garbage-collecting an old version deletes the
+    files inside that dir, which RAISES its mtime above the live one, so for a moment the
+    newest dir on disk is a manifest-less husk (a browser killed mid-cleanup leaves it
+    that way permanently). Taking only the first candidate would drop the extension from
+    the instance silently.
 
     Redden: take `ls -dt … | head -1` and test that single candidate.
     """
@@ -1027,8 +1006,8 @@ def test_cli_generate_refuses_an_empty_sync_path(tmp_path):
     `Path("").expanduser().resolve()` is the CWD, so an unset `--sync-extensions
     "$BRAVE_PROFILE"` would bake the generator's working directory (the repo root) into
     the launcher and quietly load whatever `*/*/manifest.json` happens to live there.
-    Redden: go back to `if sync_extensions is not None` alone — the empty string sails
-    through it and the launcher gets `MAIN='<cwd>'`.
+    Redden: check only `if sync_extensions is not None`; the empty string sails through it
+    and the launcher gets `MAIN='<cwd>'`.
     """
     bundle = _make_bundle(tmp_path)
     out = tmp_path / "inst"
@@ -1078,8 +1057,8 @@ def test_cli_generate_stdout_does_not_claim_a_sync_that_is_not_there(tmp_path, c
 
     The two streams are routinely separated (`make instance > build.log`), and the kept one
     is stdout: the cheerful `sync extensions: <path> (re-read at EVERY launch …)` line then
-    stands alone, advertising ~26 extensions the instance will not have. `cmd_bundle`
-    already handles its own degrade this way ("NOT stamped (see the note above)").
+    stands alone, advertising extensions the instance will not have. `cmd_bundle` handles
+    its own degrade the same way ("NOT stamped (see the note above)").
 
     Redden: print the same stdout line in both states.
     """
@@ -1136,17 +1115,13 @@ def test_generate_refuses_a_comma_in_either_baked_path(tmp_path, which):
 
 
 def test_generate_result_carries_no_reconstructed_launch_command(tmp_path, capsys):
-    """The printed `launch:` line names the LAUNCHER, not an argv that would be a lie.
+    """The printed `launch:` line names the LAUNCHER, not a reconstructed argv.
 
     With sync on, the launcher resolves `--load-extension` at launch into the bundle plus
-    one dir per main-profile extension. A reconstructed argv (the old
-    `GenerateResult.launch_command`) still said `--load-extension=<bundle>` — a single
-    path — so an operator debugging "why is Bitwarden missing in this instance" copied
-    that line, got a browser without Bitwarden and concluded the sync was at fault. This
-    repo does not accept silent divergence (cf. the build stamp's `-dirty` marker), so the
-    field is gone and the script is the one source of truth for the argv.
+    one dir per main-profile extension, so any argv reconstructed at generation time would
+    name the bundle alone. The script is the one source of truth for the argv.
 
-    Redden: put `launch_command` back on the dataclass and print `shlex.join` of it.
+    Redden: add a `launch_command` to the dataclass and print `shlex.join` of it.
     """
     ext = _fake_main_profile(tmp_path)
     bundle = _make_bundle(tmp_path)
@@ -1296,9 +1271,9 @@ _CURATOR_ID = "cccccccccccccccccccccccccccccccc"
 def _install_unpacked(source: Path, ext_id: str, version="1.0.0_0") -> Path:
     """Make *ext_id* look INSTALLED in a source profile, the way the browser leaves it.
 
-    A `<version>/manifest.json`, because that — not a bare `Extensions/<id>` — is what the
+    A `<version>/manifest.json`, because that (not a bare `Extensions/<id>`) is what the
     launcher itself treats as an installed extension (`core._render_extension_sync`), and
-    the copy's eligibility filter now uses the same definition.
+    the copy's eligibility filter uses the same definition.
     """
     d = source / state.EXTENSIONS_DIRNAME / ext_id / version
     d.mkdir(parents=True)
@@ -1459,12 +1434,10 @@ def test_copy_state_only_refuses_an_id_that_has_no_extensions_dir(tmp_path, monk
 def test_copy_state_only_tells_a_typo_apart_from_an_identity_clone(tmp_path, monkeypatch):
     """The three refusals `--only` can have are three DIFFERENT sentences.
 
-    All three used to be one: "no Extensions/<id> dir … its storage holds THIS install's
-    identity". So a one-character typo in Bitwarden's id told the owner he had nearly
-    overwritten his own `install_uuid` — a security incident report for a slip of the
-    finger, which is how a real refusal stops being read.
+    A one-character typo in an id must not be reported as an attempt to overwrite this
+    install's `install_uuid`, or real identity refusals stop being read.
 
-    Redden: collapse any two cases back into one message.
+    Redden: collapse any two cases into one message.
     """
     source = _fake_source_profile(tmp_path)
     inst = _instance_with_state(tmp_path)
@@ -1666,14 +1639,12 @@ def test_pgrep_exit_1_is_the_only_all_clear(monkeypatch):
 
 @pytest.mark.parametrize("code", [2, 3])
 def test_pgrep_error_exit_refuses_instead_of_reading_empty_stdout(monkeypatch, code):
-    """THE fail-open that mattered: `pgrep` exits 2 on a bad pattern and 3 on a fatal
-    error, BOTH with empty stdout.
+    """`pgrep` exits 2 on a bad pattern and 3 on a fatal error, BOTH with empty stdout.
 
-    The old guard never looked at `returncode` at all — it parsed stdout, found nothing and
-    reported "Brave is not running", which lets the copy run onto live LevelDBs. Reproduced
-    on the real machine: `pgrep -fl "["` exits 2 and prints nothing.
+    Parsing stdout alone would report "Brave is not running" and let the copy run onto
+    live LevelDBs (`pgrep -fl "["` exits 2 and prints nothing).
 
-    Redden: drop the `returncode not in (0, 1)` check — the call returns `[]` and this
+    Redden: drop the `returncode not in (0, 1)` check; the call returns `[]` and this
     test fails.
     """
     _fake_pgrep(monkeypatch, code, stderr="pgrep: bad pattern")
@@ -1696,11 +1667,11 @@ def test_pgrep_exit_0_with_no_output_refuses(monkeypatch):
 def test_pgrep_unparseable_line_counts_as_a_running_process(monkeypatch):
     """A matched line that cannot be parsed is PROOF of a live process, never a nothing.
 
-    The old code silently DISCARDED any line without a space (`if " " in line`), so a
-    single unusual line could empty the whole result and open the guard.
+    Discarding unparseable lines (e.g. `if " " in line`) could empty the whole result and
+    open the guard.
 
     Redden: filter unparseable lines out of `running_brave_processes` or out of
-    `browsers_to_quit` — the copy would then proceed with a browser alive.
+    `browsers_to_quit`; the copy would then proceed with a browser alive.
     """
     _fake_pgrep(monkeypatch, 0, stdout="not-a-pgrep-line\n")
     running = state.running_brave_processes()
@@ -1713,12 +1684,11 @@ def test_pgrep_unparseable_line_counts_as_a_running_process(monkeypatch):
 def test_pgrep_helpers_and_shims_are_labelled_apart_from_browsers():
     """A crashpad handler or a PWA shim is not "the MAIN Brave profile".
 
-    Six of the 84 matches on the owner's machine are type-less non-browsers
-    (`chrome_crashpad_handler`, `app_mode_loader`). Calling them "the MAIN Brave profile"
-    told the operator to quit a browser that was not running, with no pid and deliberately
-    no --force to get past it.
+    Type-less non-browsers (`chrome_crashpad_handler`, `app_mode_loader`) also match.
+    Calling them "the MAIN Brave profile" would tell the operator to quit a browser that is
+    not running, with no pid and no --force to get past it.
 
-    Redden: label every type-less process "the MAIN Brave profile" again.
+    Redden: label every type-less process "the MAIN Brave profile".
     """
     labels = state.browsers_to_quit([
         "93062 /Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -1843,9 +1813,9 @@ def test_running_brave_processes_refuses_an_empty_pattern_set(monkeypatch, binar
     """"Fails closed" must not depend on the caller passing a binary.
 
     With no pattern the loop never runs, `pgrep` is never called and EVERY refusal branch
-    in `_pgrep` is skipped — the function returned `[]`, which its callers read as "no
-    browser is running", having checked nothing. No CLI path reaches it today (the default
-    binary is always in the set), but the docstring promises this unconditionally.
+    in `_pgrep` is skipped: the function would return `[]`, which callers read as "no
+    browser is running", having checked nothing. No CLI path reaches it (the default
+    binary is always in the set), but the guard does not rely on that.
 
     Redden: drop the `if not patterns` guard — `pgrep` is never invoked and the call
     answers "all clear".
@@ -1859,17 +1829,15 @@ def test_running_brave_processes_refuses_an_empty_pattern_set(monkeypatch, binar
 
 
 def test_exclusion_reason_tells_a_component_extension_from_an_install_identity(tmp_path):
-    """Six of the seven excluded ids on the real profile are Chrome COMPONENT extensions
-    (Web Store, Docs Offline, …) — excluded correctly and described wrongly: every one was
-    told its storage "is per-install IDENTITY", which is true only of the id THIS instance
-    loads unpacked.
+    """Chrome COMPONENT extensions (Web Store, Docs Offline, …) are excluded, but their
+    storage is not per-install IDENTITY; only the id THIS instance loads unpacked is.
 
     Layer (b) is what tells them apart, so this instance gets a real launcher: the derived
     id keeps the identity wording, and the component-shaped id (state, no `Extensions/<id>`,
     NOT the unpacked id) is described as what it is.
 
-    Redden: collapse the two branches of `_exclusion_reason` back into one — the component
-    id is accused of being this install's identity again.
+    Redden: collapse the two branches of `_exclusion_reason` into one; the component id
+    is then described as this install's identity.
     """
     bundle = tmp_path / "dist"
     bundle.mkdir()
@@ -1904,8 +1872,8 @@ def test_copy_state_says_when_identity_layer_b_could_not_be_computed(
     """A launcher that is missing or carries no `--load-extension` makes layer (b) yield no
     ids — it excludes nothing and the run proceeds on layer (a) alone.
 
-    That is the right degradation and the wrong silence: the output was identical to a
-    healthy run, so a weaker guard had to be inferred from the phrasing of a reason.
+    That degradation is right, but it must be visible: otherwise the output is identical
+    to a healthy run.
 
     Redden: drop `unpacked_layer_note` (or the CLI's note) — the degraded run prints
     exactly what a fully guarded one prints.
@@ -1960,15 +1928,15 @@ def test_copy_state_unpacked_id_is_read_through_the_sync_launcher_form(tmp_path)
 def test_copy_state_requires_a_real_manifest_not_a_bare_extensions_dir(
     tmp_path, monkeypatch
 ):
-    """NEGATIVE layer, tightened: an EMPTY or half-removed `Extensions/<id>` is not an
-    installed extension.
+    """NEGATIVE layer: an EMPTY or half-removed `Extensions/<id>` is not an installed
+    extension.
 
     The launcher only loads a version dir once it finds `<version>/manifest.json`, so that
-    is what "installed" means on both sides. `mkdir Extensions/<curator id>` used to be
-    enough to defeat the only guard standing between the curator's storage — this
-    install's `install_uuid` and enrollment secret — and the copy.
+    is what "installed" means on both sides. Otherwise `mkdir Extensions/<curator id>`
+    would defeat the guard between the curator's storage (this install's `install_uuid`
+    and enrollment secret) and the copy.
 
-    Redden: go back to `(extensions / entry.name).is_dir()`.
+    Redden: check only `(extensions / entry.name).is_dir()`.
     """
     source = _fake_source_profile(tmp_path)
     inst = _instance_with_state(tmp_path)
@@ -2006,8 +1974,8 @@ def test_copy_state_names_the_id_it_died_on_and_the_ids_already_committed(
     """The loop commits PER ID, so a failure half-way leaves a half-migrated profile — and
     the previous state of the ids already done is gone.
 
-    An `OSError` from `shutil` is not `StateCopyRefused`, so the CLI used to hand the
-    operator a raw traceback and no idea which ids had already moved.
+    An `OSError` from `shutil` is not `StateCopyRefused`; it is converted so the CLI names
+    the id it died on and reports which ids already moved, instead of a raw traceback.
 
     Redden: let the OSError propagate untouched, or drop the stderr report.
     """
@@ -2130,13 +2098,13 @@ def test_cli_copy_state_refuses_an_empty_only(tmp_path, value):
 
 
 def test_makefile_passes_only_whenever_it_is_defined(tmp_path):
-    """`$(if $(ONLY),…)` turned `ONLY=` into "copy all 21", defeating the CLI's own guard.
+    """`ONLY=` (defined but empty) must reach the CLI's empty-`--only` guard.
 
-    Asserted against the Makefile text rather than by running make: the bug is exactly the
-    `$(if $(ONLY),…)` shape, and `$(origin ONLY)` is what tells "defined but empty" from
-    "not given at all".
+    Asserted against the Makefile text rather than by running make: `$(if $(ONLY),…)`
+    would treat an empty value as "not given" and copy everything, while `$(origin ONLY)`
+    tells "defined but empty" from "not given at all".
 
-    Redden: go back to `$(if $(ONLY),--only "$(ONLY)",)`.
+    Redden: use `$(if $(ONLY),--only "$(ONLY)",)`.
     """
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text()
     assert '$(if $(ONLY),--only' not in makefile
@@ -2148,8 +2116,8 @@ def test_makefile_passes_only_whenever_it_is_defined(tmp_path):
 def test_cli_copy_state_dry_run_writes_nothing_and_explains_the_exclusions(
     tmp_path, monkeypatch, capsys
 ):
-    """`--dry-run` answers "which ids, how big, what is skipped and why" BEFORE 130 MB of
-    encrypted vault moves — the warnings used to print only after it already had.
+    """`--dry-run` answers "which ids, how big, what is skipped and why" BEFORE any
+    encrypted vault moves.
 
     It also must not refuse on a running browser: that is the moment the operator is
     deciding whether to quit it. Redden: make the dry run take the copy path, or drop the
@@ -2186,8 +2154,8 @@ def test_cli_copy_state_dry_run_writes_nothing_and_explains_the_exclusions(
 
 
 def test_plan_sizes_what_is_destroyed_not_only_what_arrives(tmp_path):
-    """The plan sized the SOURCE only, so the run read as "21 ids arrive" when it is also
-    "42 MB of this instance's own state is deleted" — MetaMask's wallet among them.
+    """The plan sizes both what arrives and what is DELETED: this instance's own state for
+    those ids, wallets among them.
 
     `_instance_with_state` gives the destination a `_STORE_ID` directory and no
     `_STORE_ID_2` one, which is the real shape: some ids have state to lose, some do not.
@@ -2268,16 +2236,14 @@ def test_cli_copy_state_real_run_reports_the_state_it_deleted(tmp_path, monkeypa
 
 
 def test_cli_copy_state_states_the_appid_and_names_metamask(tmp_path, monkeypatch, capsys):
-    """Two corrections to what the operator is told, both about what is NOT local.
+    """The closing paragraph is accurate about what is NOT local.
 
-    The text used to state as FACT that "logging out here does not log the others out".
-    That holds for the local LevelDBs; it does not follow for the SERVER, because the
-    copied Bitwarden storage carries its `appId` — the device identifier a refresh token is
-    bound to — so both profiles become one device server-side. That half was never
-    verified, so it is qualified rather than asserted. And only Bitwarden was named while
-    MetaMask is eligible too, its storage holding an encrypted SEED vault.
+    Logging out does not propagate between the local LevelDBs, but the copied Bitwarden
+    storage carries its `appId` (the device identifier a refresh token is bound to), so
+    both profiles are one device server-side; that consequence is unverified and stated as
+    such. MetaMask is eligible too, its storage holding an encrypted SEED vault.
 
-    Redden: re-assert the logout claim, or drop MetaMask from the paragraph.
+    Redden: assert the logout claim unqualified, or drop MetaMask from the paragraph.
     """
     source = _fake_source_profile(tmp_path)
     inst = _instance_with_state(tmp_path)

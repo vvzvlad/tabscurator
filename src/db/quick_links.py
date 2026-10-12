@@ -1,7 +1,7 @@
 """Synchronous ``fn(conn)`` bodies for the ``quick_links`` table (§4/§10).
 
-Every mutating function here runs INSIDE one ``Database.write`` transaction (Фаза 2
-contract: no ``await``, one BEGIN/COMMIT). All SQL is parameterized; no id or
+Every mutating function here runs INSIDE one ``Database.write`` transaction (no
+``await``, one BEGIN/COMMIT). All SQL is parameterized; no id or
 position is ever string-interpolated.
 
 The startpage keeps an OFFLINE op queue in ``chrome.storage.local`` and flushes it

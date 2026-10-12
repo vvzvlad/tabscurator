@@ -1,17 +1,16 @@
 """Per-instance browser generator (docs/architecture.md §13).
 
-Under enrollment (§6/§13, issue #35/#37) the fleet loads ONE universal extension
-bundle and an instance is a THIN wrapper around it. Two commands, in order:
+The fleet loads ONE universal extension bundle and an instance is a thin wrapper
+around it. Two commands, in order:
 
-``bundle`` builds that single fleet-wide bundle ONCE:
+``bundle`` builds that single fleet-wide bundle once:
 
-* a copy of the repo's ``extension/`` (dev cruft skipped) and nothing else. Nothing is
-  stamped into ``manifest.json``: issue #35 removed the ``<host>`` patterns (only
-  ``<all_urls>`` is left) and the ``key`` field is gone too, so the extension id is
-  Chromium's hash of the load path (arch row 21) — which nothing consumes anymore, since
-  no origin is checked on ``/ext`` and ``/api/*`` CORS accepts any origin;
-* NO ``instance.json``, no token, no service URL, no ``instanceId``: the bundle
-  carries no credential and no address at all.
+* a copy of the repo's ``extension/`` (dev cruft skipped). The manifest has no
+  ``key`` and only ``<all_urls>`` host permissions, so the extension id is Chromium's
+  hash of the load path, which nothing consumes (no origin is checked on ``/ext`` and
+  ``/api/*`` CORS accepts any origin);
+* no ``instance.json``, token, service URL or ``instanceId``: the bundle carries no
+  credential and no address.
 
 ``generate`` then wraps that SHARED bundle per instance:
 
@@ -21,14 +20,12 @@ bundle and an instance is a THIN wrapper around it. Two commands, in order:
   takeover of the original;
 * a ``.app`` wrapper (Info.plist + launcher script + icon) whose launcher execs
   the system Brave with ``--user-data-dir`` (the profile above) and
-  ``--load-extension`` pointing at the SHARED bundle — NO per-instance copy of
-  the extension and NO ``instance.json``.
+  ``--load-extension`` pointing at the SHARED bundle.
 
-The service address and the per-install secret are not in the build at all: each
-profile receives them through the extension's enrollment settings UI, and the
-operator approves the request on ``/admin`` (§13). There is consequently no
-``restamp`` command and no token rotation — the shared token they existed for is
-gone, and a code update is a rebuild of the one shared bundle.
+The service address and the per-install secret are not in the build: each profile
+receives them through the extension's enrollment settings UI, and the operator
+approves the request on ``/admin`` (§13). A code update is a rebuild of the one
+shared bundle.
 
 The module is split into a PURE core (`core`, all filesystem/text logic, runs on
 Linux/CI) and a thin macOS platform layer (`macos`, the real ``.icns``/``.app``

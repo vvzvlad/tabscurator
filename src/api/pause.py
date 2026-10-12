@@ -56,9 +56,7 @@ async def resume_now(app) -> dict:
 
     THE start shape, shared by ``DELETE /api/pause`` and the MCP ``resume`` tool. §7
     is explicit that a manual start runs a pass at once («Старт (`DELETE /api/pause`)
-    запускает проход немедленно»). The MCP tool used to stop after the settings
-    write, so an agent's resume left the curator idle until the next tick — the same
-    verb with two behaviours. Returns ``{ttl_shift_ms, pass}``.
+    запускает проход немедленно»). Returns ``{ttl_shift_ms, pass}``.
 
     The ONE verb means TWO things, and the confirm flag follows the meaning, not the
     verb:

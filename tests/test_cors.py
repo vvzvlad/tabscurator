@@ -1,18 +1,16 @@
 """CORS on /api/* (§12): ANY origin is allowed, and credentials stay OFF.
 
 The startpage fetches /api/* cross-origin with an Authorization Bearer header, which
-forces a CORS preflight. The old ``EXT_ALLOWED_ORIGINS`` allow-list — and with it the
-"never emit ``*``" invariant — was removed on purpose (``src/api/cors.py`` carries the
-argument: /api/* is already behind ``require_api_caller``, credentials are off so there is
-no ambient session to ride, CORS binds browsers only, and the service is not reachable
-from the internet). These tests pin what replaced it, end-to-end through the real
-``create_app`` middleware stack, plus the two acceptance auth gates (/metrics needs
-METRICS_TOKEN, /api/* needs ADMIN_TOKEN or an active-instance secret — never
-METRICS_TOKEN).
+forces a CORS preflight. There is no origin allow-list (``src/api/cors.py`` explains why:
+/api/* is behind ``require_api_caller``, credentials are off so there is no ambient
+session to ride, CORS binds browsers only, and the service is not reachable from the
+internet). These tests pin that end-to-end through the real ``create_app`` middleware
+stack, plus the two acceptance auth gates (/metrics needs METRICS_TOKEN, /api/* needs
+ADMIN_TOKEN or an active-instance secret, never METRICS_TOKEN).
 
-Each test reddens if its guard is removed: dropping the CORSMiddleware drops the ACAO
-header (test 1), and turning ``allow_credentials`` back on would make the wildcard
-either illegal or dangerous (test 4).
+Each test fails if its guard is removed: dropping the CORSMiddleware drops the ACAO
+header (test 1), and turning ``allow_credentials`` on would make the wildcard either
+illegal or dangerous (test 4).
 """
 
 from conftest import make_settings
@@ -25,18 +23,17 @@ METRICS_TOKEN = "test-metrics-token"
 EXT_ORIGIN = "chrome-extension://abc"
 OTHER_EXT_ORIGIN = "chrome-extension://zzz"  # a different extension id
 FOREIGN_ORIGIN = "https://some-other-site.example"
-# /api/* now authenticates a caller (issue #35 §4); the CORS behaviour is orthogonal, so
-# the generic admin credential is used to reach a 200.
+# /api/* authenticates a caller; the CORS behaviour is orthogonal, so the generic admin
+# credential is used to reach a 200.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 
 
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{"pass_interval_min": 5}, **over})
 
@@ -70,13 +67,9 @@ def test_simple_get_carries_the_wildcard_acao(tmp_path):
 
 
 def test_an_unpinned_extension_id_is_no_longer_a_failure_mode(tmp_path):
-    """The §12 «бесшумный отказ» this file used to pin no longer exists.
-
-    An unpacked extension's id is the hash of its load path, so moving or renaming the
-    bundle changed the origin and used to cut the startpage off at the preflight while the
-    websocket stayed up and the instance looked green. With no allow-list there is nothing
-    for the id to disagree with. Redden: bring the allow-list back and one of these two
-    ids stops being served.
+    """Any extension id is served: an unpacked extension's id is the hash of its load path,
+    so moving or renaming the bundle changes the origin, and nothing may depend on it.
+    Fails if an origin allow-list is introduced: one of these two ids stops being served.
     """
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:
@@ -114,14 +107,14 @@ def test_a_foreign_origin_still_cannot_read_api_without_a_token(tmp_path):
 
 # --- the preflight can still be REJECTED, on method/header -------------------
 def test_preflight_with_an_undeclared_method_is_rejected_and_counted(tmp_path):
-    """``cors_preflight`` did NOT become unreachable when origins were opened up.
+    """``cors_preflight`` is still reachable with any origin allowed.
 
-    Starlette refuses a preflight on three grounds — origin, method, header — and only
-    the origin ground is gone. A verb outside ``_ALLOW_METHODS`` (or a header outside
-    ``_ALLOW_HEADERS``) is still a 400, and it is still the §12 silent-failure shape: the
-    socket stays up, the instance stays green, only the fetch dies. That is why
-    ``CountingCORSMiddleware`` and its alert rule are kept. Redden: delete the counting
-    override and the counter stops moving.
+    Starlette refuses a preflight on three grounds (origin, method, header) and only the
+    origin ground is open. A verb outside ``_ALLOW_METHODS`` (or a header outside
+    ``_ALLOW_HEADERS``) is still a 400, and it is the §12 silent-failure shape: the socket
+    stays up, the instance stays green, only the fetch dies. That is why
+    ``CountingCORSMiddleware`` and its alert rule exist. Fails if the counting override is
+    deleted: the counter stops moving.
     """
     from src.api.auth_metrics import auth_rejections
 

@@ -5,12 +5,11 @@ Order (§7): (0) server-clock check; (1) the stop gate + the resume_pending latc
 on the pass's OWN request ids; (4-8) guards / routing / phase A / phase B / dedup /
 singleton, each tab isolated; the ``passes`` row is written for every real pass
 (even an empty one). Window merge (step 9, §9) runs LAST, after the tab decisions,
-so those decide against a stable window picture (Фаза 15).
+so those decide against a stable window picture.
 
 The ONE mass-action protection is the plan-size threshold (``MAX_ACTIONS_PER_PASS``):
 a real pass whose countable plan (phase-A relocations + closes) exceeds it defers the
-plan behind a confirming click instead of executing it — see the threshold gate below
-for the full design rationale.
+plan behind a confirming click instead of executing it — see the threshold gate below.
 
 Every mutation is a lease-guarded ``Database.write`` (§7): a lost lease raises
 :class:`~src.curator.lease.LeaseLost`, which stops the pass at once. WS I/O and the
@@ -92,10 +91,9 @@ def _acquire_unless_stopped(
     stopped_since)``.
 
     ``curator_stopped_at`` and the lease both live in ``settings``, so this is one
-    synchronous ``fn(conn)`` inside a single ``BEGIN IMMEDIATE`` — which is what closes
-    the window between the step-1 stop read and the acquire (the TOCTOU hole: a stop
-    pressed between that read and this write would otherwise be out-epoched by the
-    acquire's own bump, and the pass would run through an armed emergency stop). When
+    synchronous ``fn(conn)`` inside a single ``BEGIN IMMEDIATE`` — which closes the
+    window between the step-1 stop read and the acquire (a stop pressed in between would
+    otherwise be out-epoched by the acquire's own bump). When
     stopped NOTHING is touched (no epoch bump, no owner), and ``stopped_since`` names
     the stop moment.
 
@@ -115,21 +113,15 @@ def _acquire_unless_stopped(
 def _revalidate_rules(conn: sqlite3.Connection, main_instance_id: str) -> int:
     """Re-check every rule's target instance and pattern (§8/§12, one writer ``fn``).
 
-    §12 requires this on every pass, not only at save time: validation at save catches
-    a typo, but RETIRING an instance produces exactly the same orphaned rule afterwards
-    — silently, and preview cannot show it (it counts pattern matches, not target
-    existence). Orphans end up ``invalid=1``, which the existing
-    ``curator_rules_invalid`` alert and the editor highlight already surface.
+    §12 requires this on every pass, not only at save time: RETIRING an instance
+    orphans its rules silently, and preview cannot show it (it counts pattern matches,
+    not target existence). Orphans end up ``invalid=1``, which the
+    ``curator_rules_invalid`` alert and the editor highlight surface.
 
     **``MAIN_INSTANCE_ID`` counts as known even with no ``instances`` row**, exactly as
-    the save-time check does (``src.api.rules._validate_instance_or_422``): §12 demands
-    ONE rule ("валидируется ... при записи и на каждом проходе"), and a main that has
-    never connected is a state the product explicitly models (the
-    ``curator_main_instance_never_seen`` metric). Without the exemption a legally saved
-    "X -> main" rule is invalidated by the first pass; if it is the only rule,
-    ``has_active_rules`` then reports an empty policy, the unruled drain switches off
-    and the curator quietly stops doing anything at all — while an alert blames the
-    owner's rule.
+    the save-time check does (``src.api.rules._validate_instance_or_422``): a main that
+    has never connected is a modelled state (``curator_main_instance_never_seen``), and
+    a legally saved "X -> main" rule must not be invalidated by the first pass.
 
     Runs BEFORE the mirror is captured, so THIS pass already routes with the corrected
     flags.
@@ -233,7 +225,7 @@ async def _isolated(coro, ctx=None) -> None:
     propagate so the whole pass stops (§7).
 
     With ``ctx``, a unit that raised unexpectedly before counting itself is counted as
-    not performed under ``unexpected_error`` (#66); one that already counted itself
+    not performed under ``unexpected_error``; one that already counted itself
     gets nothing extra."""
     before = ctx.performed + sum(ctx.not_performed.values()) if ctx is not None else 0
     try:
@@ -310,12 +302,8 @@ async def run_pass(
     owner = f"pass-{uuid.uuid4()}"
     # The stop flag is re-read INSIDE the acquiring transaction. Step 1's check alone is
     # a TOCTOU hole: a stop pressed between that read and this write bumps the epoch to
-    # E+1, `acquire` immediately bumps it to E+2, and the pass then owns the freshest
-    # epoch — every guarded write passes, ``curator_stopped_at`` is never consulted
-    # again, and the owner who hit the emergency stop watches the curator close tabs
-    # for minutes (§7 "этого достаточно, чтобы остановить уже идущий проход"). Both
-    # values live in ``settings``, so the check costs one extra SELECT in the same
-    # ``fn(conn)`` — no await, no second transaction, no race left.
+    # E+1, `acquire` bumps it to E+2, and the pass would own the freshest epoch and run
+    # through the stop.
     acquired, epoch, stopped_since = await db.write(
         lambda c: _acquire_unless_stopped(
             c, owner, now, settings.lease_ttl_ms, honor_stop=not dry_run
@@ -351,33 +339,22 @@ async def run_pass(
         # lease guard, BEFORE the mirror is frozen so this pass already routes with the
         # corrected flags.
         #
-        # Runs for a dry_run TOO. "dry_run writes nothing" is a promise about the
-        # ACTIONS journal (§12) — the plan must cost no closures and no `passes` row —
-        # and `rules.invalid` is neither: it is the policy's own health, which §12 says
-        # every pass re-derives. Skipping it here would make the plan the owner CONFIRMS
-        # behind the threshold latch disagree with the pass that executes it: the plan
-        # would be routed on stale flags, the confirming pass would revalidate first and
-        # route differently, and "confirmed" would stop meaning "this is what will
-        # happen" for exactly the rules §12 wants re-checked.
+        # Runs for a dry_run TOO: "dry_run writes nothing" is about the actions journal
+        # (§12), and `rules.invalid` is policy health every pass re-derives. Skipping it
+        # would route the plan the owner confirms on different flags than the pass that
+        # executes it.
         await db.write(
             lease.guarded(
                 epoch, lambda c: _revalidate_rules(c, settings.main_instance_id)
             )
         )
 
-        # --- retire relocations of REVOKED instances (issue #35 §5) ----------
-        # The one lease-guarded region that does NOT depend on ready_ids (§5: "единственный
-        # участок под гардом аренды, не зависящий от ready_ids"), placed AFTER
-        # _revalidate_rules and BEFORE the mirror is frozen — which is what makes it
-        # race-free against phase B: a relocation marked `abandoned` here is no longer
-        # `status='done'`, so the mirror captured just below excludes it from
-        # `live_relocations`, and `decide`/phase B never see it as a phase-B candidate.
-        # phases.py warns a retire racing phase B would journal a relocation both `closed`
-        # AND `abandoned`; running before the capture — with no other pass able to run,
-        # the lease slot — removes that race entirely. Reuses the §33 action-status helper
-        # (`mark_action_abandoned`), not a parallel mechanism. Skipped on dry_run (a
-        # dry_run writes no actions, exactly like reconcile). Per row isolated; one failed
-        # retire must not abort the pass.
+        # --- retire relocations of REVOKED instances (§5) ---------------------
+        # The one lease-guarded region that does NOT depend on ready_ids (§5), placed
+        # BEFORE the mirror is frozen so it cannot race phase B: a relocation marked
+        # `abandoned` here is excluded from `live_relocations` in the mirror captured
+        # just below. Skipped on dry_run (a dry_run writes no actions). Per row
+        # isolated; one failed retire must not abort the pass.
         if not dry_run:
             for reloc_id in await db.read(read_revoked_relocations):
                 await _isolated(_retire_revoked_relocation(db, epoch, reloc_id))
@@ -391,7 +368,7 @@ async def run_pass(
         )
 
         # --- reconcile: resolve prior-pass PENDING closes EARLY, before decide
-        # (§7, WARNING-1). Each pending *_close (a close whose completion write was
+        # (§7). Each pending *_close (a close whose completion write was
         # fenced by a lost lease) is resolved against this fresh mirror: → done when
         # the source is gone (at-least-once journal), → abandoned when it is still
         # present (decide re-issues it). Per row isolated; every write lease-guarded.
@@ -401,7 +378,7 @@ async def run_pass(
         # relocation is never both reconciled AND phase-B'd in the same pass.
         # A row whose source instance did NOT answer THIS pass's snapshot is left
         # alone by ``run_reconcile`` — see its readiness gate. A row younger than one
-        # ``cmd_timeout_ms`` is skipped by ``read_pending_closes`` itself (#48): the
+        # ``cmd_timeout_ms`` is skipped by ``read_pending_closes`` itself: the
         # synchronous relocate_tab verb writes its pending close BEFORE sending the
         # source close, so its row must not be reconciled while that verb is still
         # awaiting the response.
@@ -496,10 +473,9 @@ async def run_pass(
             # 6). §7 defines `deferred` as "вызвано соединением, сменой эпохи или
             # слиянием окон", and the same-url hold-back (a tab waiting for the copy
             # this pass is opening) is a DIFFERENT thing wearing the same status.
-            # Splitting the rows by ``decision`` keeps curator_deferred_total exactly
-            # as it was (metrics sums every deferred row per instance_to) while making
-            # the cause answerable from the journal and separable by a later metrics
-            # change — see the report.
+            # Splitting the rows by ``decision`` keeps curator_deferred_total unchanged
+            # (metrics sums every deferred row per instance_to) while making the cause
+            # answerable from the journal.
             for to_instance, count in decisions.deferred.items():
                 same_url = decisions.deferred_same_url.get(to_instance, 0)
                 if count - same_url > 0:
@@ -524,7 +500,7 @@ async def run_pass(
             # collapse into one. Planned purely from the same frozen mirror; each
             # instance isolated so one bad merge cannot sink the pass; every write
             # lease-guarded (§7/§9).
-            # main is skipped unconditionally (#41): its window layout is the owner's,
+            # main is skipped unconditionally: its window layout is the owner's,
             # and a merge is not undoable.
             for merge in decidemod.decide_window_merges(
                 mirror, ready_ids, now=now, idle_ms=idle_ms,
@@ -538,12 +514,9 @@ async def run_pass(
             # ready instances, so an empty ready set produces an empty plan by
             # construction and proves nothing about the armed plan having shrunk.
             # Clearing on it would make the latch (and curator_resume_pending) flap
-            # with fleet connectivity — a sleeping laptop erases a 500-action plan,
-            # the next connected pass re-arms it. So the latch outlives passes that
-            # saw nothing. The confirm path shares this guard deliberately: a click
-            # that ran against zero ready instances executed nothing and its plan is
-            # still pending — consistent with the resume_now docstring ("a pass that
-            # never got to run leaves the latch armed").
+            # with fleet connectivity. The confirm path shares this guard: a click that
+            # ran against zero ready instances executed nothing and its plan is still
+            # pending.
             if ready_ids:
                 await db.write(lease.guarded(epoch, _clear_deferred_plan))
     except lease.LeaseLost:
@@ -574,7 +547,7 @@ async def run_pass(
 
     actions_count = ctx.actions_count if ctx is not None else 0
     # ``actions_count`` counts journal rows, including deferred / failed / abandoned
-    # ones; the owner-facing "done N" needs the split (#66). See PassCtx.
+    # ones; the owner-facing "done N" needs the split. See PassCtx.
     actions_performed = ctx.performed if ctx is not None else 0
     not_performed = dict(ctx.not_performed) if ctx is not None else {}
     instances_ready = len(ready)
@@ -627,9 +600,9 @@ async def run_pass(
 
 # --- sub-executions ----------------------------------------------------------
 async def _retire_revoked_relocation(db, epoch: int, reloc_id: int) -> None:
-    """Mark ONE live relocate row of a revoked instance ``abandoned`` (issue #35 §5),
-    under the lease guard. Reuses the §33 helper; a lost lease propagates (stopping the
-    pass), a per-row failure is isolated by :func:`_isolated`."""
+    """Mark ONE live relocate row of a revoked instance ``abandoned`` (§5), under the
+    lease guard. A lost lease propagates (stopping the pass), a per-row failure is
+    isolated by :func:`_isolated`."""
     from src.db.actions import mark_action_abandoned
 
     await db.write(lease.guarded(epoch, lambda c: mark_action_abandoned(c, reloc_id)))
@@ -657,7 +630,7 @@ async def _write_deferred(ctx, to_instance: str, count: int, decision: str) -> N
             decision=decision,
         )
 
-    # ``count`` tabs that did not move: each is an action not performed (#66). Counted
+    # ``count`` tabs that did not move: each is an action not performed. Counted
     # before the write: they are deferred whether or not the journal row lands, and a
     # failed write must not shrink them to a single ``unexpected_error`` in _isolated.
     phases.note_not_performed(ctx, decision, count)
@@ -685,8 +658,7 @@ def _resume_pending_value(since: int, plan: dict) -> str:
 async def _renew_loop(db, owner: str, epoch: int, ttl_ms: int) -> None:
     """Extend the lease every ``ttl_ms/3`` until cancelled or the lease is lost.
 
-    Hardened (WARNING 1, Фаза-8 sub-path): a TRANSIENT write fault (degraded DB, a
-    disk blip) must NOT silently stop renewal — a stopped loop lets the lease expire,
+    A TRANSIENT write fault (degraded DB, a disk blip) must NOT silently stop renewal — a stopped loop lets the lease expire,
     another pass then bumps the epoch, and this still-running pass loses its lease
     mid-flight. So a transient error is logged and RETRIED next interval; the loop
     stops ONLY on a definitive lost lease (``renew`` returns ``False``) or on

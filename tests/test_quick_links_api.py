@@ -11,7 +11,7 @@ from starlette.testclient import TestClient
 from src.app import create_app
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -20,10 +20,9 @@ AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{
             "pass_interval_min": 5,

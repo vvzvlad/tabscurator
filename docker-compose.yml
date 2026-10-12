@@ -18,23 +18,12 @@ networks:
 
 services:
   curator:
-    # `:develop` is the deployed tag — CI publishes it on every push to `develop`,
-    # and the io.portainer.update label below auto-updates the container from it. `main` is
-    # reserved for releases (`:latest` + `:<sha>`) but does not exist yet, so
-    # pinning `:latest` here would resolve to an image that was never published.
+    # `:develop` is the deployed tag — CI publishes it on every push to `develop`
+    # (.gitea/workflows/image-check-publish.yml), and the io.portainer.update label
+    # below auto-updates the container from it. `:latest` is reserved for releases.
     #
-    # The registry is the GITEA one, matching where the pipeline actually pushes
-    # (.gitea/workflows/image-check-publish.yml). It used to say ghcr.io, left over
-    # from the GitHub Actions era; nothing publishes there any more, so the stale
-    # address read as "the updater will never see a new image".
-    #
-    # ⚠️ This file is a REFERENCE, not the deployed stack: the live container is
-    # configured in Portainer and carries its own image address. Editing this line
-    # does not redeploy anything — change it in Portainer too, or it drifts again.
-    # The org is `projects`, not `vvzvlad`: the workflow builds the path from
-    # `github.repository`, which is `projects/tabscurator`, and the live container
-    # in production pulls exactly that. The `vvzvlad/...` spelling here published
-    # nowhere and matched nothing.
+    # This file is a reference, not the deployed stack: the live container is
+    # configured in Portainer, so an image change here must be repeated there.
     image: gitea.vvzvlad.xyz/projects/tabscurator:develop
     container_name: curator
     restart: always
@@ -62,9 +51,6 @@ services:
       # share free space with the DB — `curator-backup-stale` is what tells you the
       # nightly copy stopped landing (DEPLOY.md §5).
       BACKUP_DIR: /app/data/backups
-      # Restore-from-backup detection was replaced by the per-pass action threshold
-      # (MAX_ACTIONS_PER_PASS, §7): whatever a restore breaks shows up as an oversized
-      # plan, which defers behind one confirming click. No marker, no extra env.
       TZ: Europe/Moscow
     networks:
       - docker_main_net

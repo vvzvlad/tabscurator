@@ -1,7 +1,6 @@
 """Server-side preview: model the WHOLE next pass against the current mirror (§8).
 
-Preview is the replacement for the removed action-count limiter (§8, стр. 15), so
-it must be honest about staleness and must model the whole pass, not just the one
+Preview is what the human confirms a rule change by (§8), so it must be honest about staleness and must model the whole pass, not just the one
 edited rule:
 
 * It applies the §8 matcher to the CURRENT ``tabs`` mirror and simulates the next
@@ -25,14 +24,9 @@ tab in the pass; preview does not read them).
 
 **The routing decision itself is IMPORTED from the pass** (:func:`src.curator.decide._route`
 plus :func:`~src.curator.decide.compile_orphan_rules`) rather than restated here, and
-the same-pass ``planned_opens`` rule is mirrored. §8 is explicit that a second
-implementation of the routing/matching is exactly what must not exist, and this module
-drifted that way once: the pass grew an orphaned-rule branch (a tab whose rule points at
-a retired instance is DEFERRED, not drained to ``main``) and a same-pass duplicate branch
-(the second identical tab is deferred, not opened twice), while the preview kept its own
-copy and reported relocations that would never happen — to the wrong destination.
-``tests/test_rules_preview_parity.py`` runs both engines over one fixture and is the
-guard against a third drift.
+the same-pass ``planned_opens`` rule is mirrored: §8 forbids a second implementation of
+the routing/matching. ``tests/test_rules_preview_parity.py`` runs both engines over one
+fixture to catch drift.
 """
 
 from __future__ import annotations
@@ -429,20 +423,15 @@ def load_preview_input(
         "SELECT instance_id, tab_id, window_id, url, title, pinned, active, "
         "audible, opened_at, last_active_at, age_unknown FROM tabs"
     ).fetchall()
-    # ACTIVE-only, mirroring ``access.known_instance_ids`` (issue #35 §6: "the filter is
+    # ACTIVE-only, mirroring ``access.known_instance_ids`` (§6: "the filter is
     # needed in BOTH places or neither"). A revoked instance must not contribute its tabs
     # to the simulation nor be listed as a countable instance — even in the transient
     # window where its socket close after revoke has not yet flipped ``connected`` to 0.
     #
-    # NO main exemption here, deliberately (unlike the known_instance_ids consumers, which
-    # exempt MAIN to keep an "X -> main" RULE valid). The drain is a property of the RULE
-    # set: ``simulate`` reads ``has_active_rules(inp.rules)`` — not this instance list — to
-    # decide ``enables_drain``, and the drain TARGET is ``inp.main_instance_id`` passed
-    # straight from settings, never resolved from this list. So filtering MAIN out never
-    # switches the drain off; excluding a revoked/pending MAIN only (correctly) DEFERS
-    # relocations toward a MAIN that genuinely cannot receive them, exactly as an
-    # unreachable target already does. An active MAIN passes the filter unchanged, and a
-    # never-connected MAIN had no row to begin with — so the plain status filter is right.
+    # NO main exemption here (unlike the known_instance_ids consumers): the drain is
+    # decided by ``has_active_rules(inp.rules)`` and targets ``inp.main_instance_id`` from
+    # settings, never this list, so a revoked/pending MAIN only DEFERS relocations toward
+    # it, as an unreachable target does.
     instances = conn.execute(
         "SELECT id, connected, snapshot_at, focused_window_id FROM instances "
         "WHERE status = 'active'"

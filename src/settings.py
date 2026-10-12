@@ -90,24 +90,13 @@ class Settings(BaseSettings):
     # window (arm_enroll_window silently floors it to 1) and a value above the clamp would
     # be silently reduced — both are config that does not mean what it says.
     enroll_window_min: int = Field(default=10, ge=1, le=ENROLL_WINDOW_MAX_MIN)
-    # ENROLL_MAX_PENDING and ENROLL_REQUEST_TTL_MIN are GONE, together with the
-    # `enroll_requests` table they governed. Enrolment is one step now (§6): an
-    # enroll_request with a valid code into an open window creates the active instance
-    # immediately, so there is no pending list to cap and no stale row to age out. Their
-    # cross-validator (TTL >= ENROLL_WINDOW_MIN, which existed because an approve was gated
-    # on the window still being open) went with them: nothing outlives the frame anymore.
-    # Both are read from `.env` as `extra="ignore"` leftovers without error, which is the
-    # right behaviour for a knob that stopped meaning anything.
-    #
-    # Lifetime of an /admin HTML-console browser SESSION (§13, issue #36). The login cookie
+    # Lifetime of an /admin HTML-console browser SESSION (§13). The login cookie
     # carries a random id (never the ADMIN_TOKEN); this is how long that id stays valid in
     # the in-memory session store before a re-login is required. Enforced SERVER-side (the
     # cookie Max-Age is only a browser hint), and a rotated ADMIN_TOKEN invalidates every
     # session immediately regardless of this.
-    # 365 days. The cookie is signed and stateless, so it survives the restarts that
-    # used to log the owner out («он должен блядь быть вечным, я не хочу его вводить
-    # еще раз»); the remaining expiry is a bound, not a schedule. NOT infinite on
-    # purpose: a stateless cookie has no server-side revoke, so its lifetime is the
+    # 365 days. The cookie is signed and stateless, so it survives restarts. NOT infinite
+    # on purpose: a stateless cookie has no server-side revoke, so its lifetime is the
     # only thing that eventually retires a copy someone walked off with. Rotating
     # ADMIN_TOKEN kills every cookie immediately and is the real revoke.
     admin_session_ttl_min: int = Field(default=525_600, ge=1)
@@ -142,14 +131,12 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # --- Build identity (NOT a knob) --------------------------------------------
-    # WHICH REVISION IS RUNNING. The service is deployed as a ghcr image and updated by
-    # watchtower, so «кнопка не работает» has two indistinguishable causes — the code is
-    # broken, or the code is still the old one — and neither the logs nor /healthz used to
-    # separate them. This field is that separator, and it is reported by /healthz (public,
-    # no token) and printed in the /admin console.
+    # WHICH REVISION IS RUNNING. The image auto-updates, so "the button does not work" can
+    # mean broken code or code that is still the old one. This field tells them apart; it
+    # is reported by /healthz (public, no token) and printed in the /admin console.
     #
     # It is set ONCE, BY THE IMAGE BUILD: `Dockerfile` declares `ARG BUILD_REVISION` and
-    # bakes it into an `ENV`, CI passes `--build-arg BUILD_REVISION=${{ github.sha }}`.
+    # bakes it into an `ENV`, CI passes `--build-arg BUILD_REVISION=<sha>`.
     # It cannot be computed at runtime — the container has no git and no repository — and
     # deriving it from the working tree would describe the CHECKOUT, not the deployed
     # image, i.e. it would lie exactly when it matters.

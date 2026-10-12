@@ -6,11 +6,11 @@ that is already in flight (its next lease-guarded write then changes zero rows).
 synchronous ``fn(conn)`` bodies are the single, reusable stop / start primitives — the
 WRITE shape lives here ONCE and both callers converge on it:
 
-* the MCP ``pause`` / ``resume`` tools (Фаза 11), and
-* the HTTP ``POST/DELETE /api/pause`` endpoints (Фаза 16).
+* the MCP ``pause`` / ``resume`` tools, and
+* the HTTP ``POST/DELETE /api/pause`` endpoints.
 
-Each runs inside one ``Database.write`` transaction (Фаза 2 contract: no ``await``
-inside; one BEGIN/COMMIT). ``curator_stopped_at`` is stored as text ms, exactly the
+Each runs inside one ``Database.write`` transaction (no ``await`` inside; one
+BEGIN/COMMIT). ``curator_stopped_at`` is stored as text ms, exactly the
 shape ``runner.get_setting_int`` decodes; clearing it writes an empty string, which
 that decoder reads back as "not set".
 
@@ -58,9 +58,9 @@ def stop(conn: sqlite3.Connection, *, now: int) -> int:
 
     The lease SLOT is deliberately NOT freed here. The fenced pass stops at its next
     guarded write and then releases the slot itself (:func:`src.curator.lease.release`
-    is keyed on the OWNER, so a moved epoch no longer blocks it) — which is what keeps
-    the §7 promise of an immediate pass after a hand-lifted stop without ever letting
-    two passes overlap. Freeing the slot here would: ``run_phase_a`` and
+    is keyed on the OWNER, so a moved epoch does not block it) — which keeps the §7
+    promise of an immediate pass after a hand-lifted stop without ever letting two
+    passes overlap. Freeing the slot here would break that: ``run_phase_a`` and
     ``run_window_merge`` send their browser command BEFORE their first guarded write, so
     a pass triggered by a start seconds later could begin while the fenced one is still
     inside ``send_command``.
@@ -101,7 +101,7 @@ def apply_resume_shift(conn: sqlite3.Connection, *, now: int) -> int:
         return 0
     shift = max(0, now - started)
     if shift > 0:
-        # Parameterized UPDATEs (Фаза 2). Only protections still in the future relative
+        # Only protections still in the future relative
         # to the stop START are moved — an already-expired one stays expired.
         conn.execute(
             "UPDATE exemptions SET until = until + ? WHERE until > ?", (shift, started)
@@ -117,7 +117,7 @@ def apply_resume_shift(conn: sqlite3.Connection, *, now: int) -> int:
 def read_stopped_at(conn: sqlite3.Connection) -> int | None:
     """Return ``curator_stopped_at`` (ms) or ``None`` when the curator is running.
 
-    Reused by the MCP mutating-verb guard, the HTTP stop gate (Фаза 16), the
+    Reused by the MCP mutating-verb guard, the HTTP stop gate, the
     ``/api/state`` assembler and ``list_instances``. An absent/blank row => None.
     """
     return _to_int(get_setting(conn, STOPPED_AT_KEY))

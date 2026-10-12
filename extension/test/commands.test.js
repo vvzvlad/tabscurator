@@ -2136,11 +2136,8 @@ describe("setInputInWorld — set_input's injected body", () => {
   it("reaches the PROTO setter past an instance `value` override (React's value-tracker)", () => {
     // React's value-tracker installs its OWN `value` accessor ON THE ELEMENT INSTANCE, shadowing
     // the prototype's. A plain `el.value = …` would hit THAT instance setter (which React then
-    // reverts on the next render) and never reach the native one — the exact bug set_input exists
-    // to avoid. Prove the body writes through the PROTOTYPE setter, not the instance override, by
-    // spying on an instance-level setter that must stay UNTOUCHED. (If the body were changed to a
-    // direct `el.value = String(value)`, trackerSetter would fire and inputSetter would not —
-    // this test would then fail, which is precisely the regression it guards.)
+    // reverts on the next render) and never reach the native one. Prove the body writes through
+    // the PROTOTYPE setter by spying on an instance-level setter that must stay UNTOUCHED.
     withEditableEnv((env) => {
       const el = env.input();
       const trackerSetter = vi.fn();
@@ -2868,10 +2865,8 @@ describe("navigate_tab waitUntil", () => {
 
   it("'selector' waits for the COMMIT before injecting — no error about the OLD page", async () => {
     // `tabs.update` does not move `tab.url`: the old url stands until the navigation
-    // commits. Leaving `about:blank` (a fresh tab — the ordinary case) the injecting probe
-    // therefore used to see `about:blank`, trip the http/https guard and answer
-    // `precondition_failed: target is not an http/https tab` — an error about something
-    // that did not happen, AFTER the tab was already sent on its way.
+    // commits. Leaving `about:blank` (a fresh tab), the injecting probe must not see
+    // `about:blank` and answer `precondition_failed: target is not an http/https tab`.
     chromeWithOneTab("about:blank", { status: "complete" });
     chrome.__state.navCommitAfterGets = 2; // commits on the 2nd tabs.get, not instantly
     chrome.__state.scriptResults = [{ result: { matched: true } }];
@@ -2915,12 +2910,9 @@ describe("navigate_tab waitUntil", () => {
     // loading→complete round says the document was replaced. Without that third signal the
     // gate would never open and a page that really did navigate would answer matched:false.
     //
-    // ⚠️ And that round ENDS at full load, which the mock now says out loud: the tab spends
-    // gets 2-3 committed-but-still-loading, exactly where a real one does. So for this one
-    // shape `waitUntil:'selector'` degrades into "wait for load, THEN look" — while a
-    // selector is usually awaited precisely to catch an element DURING loading. Named in §6
-    // as a cost, because the alternative is not available: the commit itself is invisible
-    // here, and the only other option is burning the whole deadline.
+    // ⚠️ That round ends at full load (the mock spends gets 2-3 committed-but-still-loading),
+    // so for this shape `waitUntil:'selector'` degrades into "wait for load, THEN look" — a
+    // cost named in §6.
     chromeWithOneTab("https://old/", { status: "complete" });
     chrome.__state.navCommitAfterGets = 2;
     chrome.__state.navCompleteAfterGets = 4; // committed on get 2, `complete` only on get 4
@@ -3051,13 +3043,9 @@ describe("navigate_tab waitUntil", () => {
   });
 
   it("WHAT THAT COSTS: a mid-load tab redirected BACK to its own address pays the deadline", async () => {
-    // The other half of the same condition, pinned so it is not discovered later. For a tab
-    // that was already `loading`, a navigation whose FINAL address is the one it started
-    // from (`/admin` refused, the tab thrown to `/login` and back) now has nothing left:
-    // (2) is unsatisfiable by definition, (3) is denied because the start was `loading`, and
-    // the grace was denied for the same reason. It really did navigate, and the answer is
-    // still matched:false — deliberately, because the alternative is a confident matched:true
-    // about the document being left, which is what this gate exists to remove.
+    // For a tab that was already `loading`, a navigation whose FINAL address is the one it
+    // started from has no signal left: (2) is unsatisfiable, (3) and the grace are denied
+    // because the start was `loading`. The answer is matched:false, by design.
     chromeWithOneTab("https://old/", { status: "loading" });
     chrome.__state.navCommitAfterGets = 2;
     chrome.__state.navCommitUrl = "https://old/"; // the redirect lands where we started
@@ -3383,7 +3371,7 @@ describe("scroll_until dispatch", () => {
     );
     expect(res.ok).toBe(true);
     // grew to 5 on round 1, then 3 flat rounds => 4 rounds total, stop 'stable'. It never
-    // moved (#74): scrolledPx 0, and the 5 was already there on entry.
+    // moved: scrolledPx 0, and the 5 was already there on entry.
     expect(res.result).toEqual({
       count: 5, rounds: 4, stopped: "stable", elapsedMs: 300,
       countStart: 5, scrolledPx: 0, atBottom: true,
@@ -4818,11 +4806,9 @@ describe("screenshot (§6) — debugger path (background tab)", () => {
 
   // --- ownership race (§6): screenshot uses its OWN transient set, not focus emulation's --------
   //
-  // These reproduce the review bug: screenshot used to mark its tab in `debuggerAttachedTabs` (focus
-  // emulation's ownership set). A CONCURRENT set_focus_emulation on that tab would then either skip
-  // its own attach (seeing the tab as already attached) or, on enabled=false, DETACH the debugger
-  // out from under the in-flight capture. The fix gives screenshot `screenshotTabs`, so focus/ws
-  // verbs see it as SOMEONE ELSE'S and refuse rather than touch it.
+  // A CONCURRENT set_focus_emulation on a tab being screenshotted must neither skip its own attach
+  // nor DETACH the debugger under the in-flight capture: screenshot owns `screenshotTabs`, so
+  // focus/ws verbs see the tab as someone else's and refuse.
 
   // Poll on real macrotasks until a predicate holds (no fake timers in this suite).
   async function waitUntil(pred, tries = 200) {

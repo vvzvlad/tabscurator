@@ -12,8 +12,8 @@ command, pass or pause logic — the handlers only call the reused functions:
   just refreshed rather than one of arbitrary age
 * rules CRUD + the SAME ``confirm_impact`` gate -> :mod:`src.api.rules`
 * commands  -> :func:`src.ext.commands.send_command` (``initiator='mcp'`` + ``auth_ctx``)
-* relocate  -> BOTH phases synchronously (#48): open the copy, then close the source
-  under the step-4 guards; degrades to today's phase-A-only ``half`` when the source
+* relocate  -> BOTH phases synchronously: open the copy, then close the source
+  under the step-4 guards; degrades to the phase-A-only ``half`` when the source
   close cannot be completed (the pass's phase B / reconcile finishes it later)
 * run_pass  -> :func:`src.curator.runner.run_pass`
 * pause     -> :mod:`src.curator.pause` (settings write + ``lease.bump_epoch``)
@@ -121,9 +121,7 @@ def _measure_utf8(text: str) -> bytes:
     char sitting in some element's ``textContent`` — and a plain ``.encode("utf-8")``
     raises ``UnicodeEncodeError`` on it. That escapes :func:`_guarded` (which catches only
     ToolError/HTTPException) and dies in the transport, so ONE malformed character on a
-    page would take down a tool call that used to work: before the cap existed the value
-    passed straight through and the MCP layer encoded it with ``ensure_ascii=True``, where
-    a surrogate is harmless.
+    page would take down the tool call.
 
     ``surrogatepass`` keeps the measurement honest (the char is counted, at its 3-byte
     WTF-8 width) and never raises; the decode on the way out drops what it cannot represent.
@@ -198,9 +196,9 @@ def _clamp_timeout_ms(app, timeout_ms: int | None) -> int | None:
 
 
 def _clamp_note(app, timeout_ms: int | None) -> dict:
-    """``{clamped, timeout_ms_effective}`` when ``timeout_ms`` exceeded the ceiling, else ``{}``
-    (#71): a silent clamp made ``matched: false`` unreadable — "not within what I asked" and
-    "not within what I was given" looked the same. Call after :func:`_clamp_timeout_ms`."""
+    """``{clamped, timeout_ms_effective}`` when ``timeout_ms`` exceeded the ceiling, else ``{}``,
+    so ``matched: false`` tells "not within what I asked" from "not within what I was
+    given". Call after :func:`_clamp_timeout_ms`."""
     cap = app.state.settings.execute_js_max_timeout_ms
     if timeout_ms is not None and timeout_ms > cap:
         return {"clamped": True, "timeout_ms_effective": cap}
@@ -261,7 +259,7 @@ async def _freshen_fleet(app) -> dict:
     """Actively refresh EVERY active instance's mirror and return the per-instance
     freshness envelope ``{id: {snapshot_at, fresh, reason, session_id}}`` (§6/§11).
 
-    ``session_id`` (#47 "session epoch") is each active instance's current
+    ``session_id`` ("session epoch") is each active instance's current
     ``instances.session_id`` — the epoch an agent echoes back as ``expected_session``
     to a mutating verb so a command minted against a now-dead session is refused
     (``stale_session``) instead of closing the wrong tab after a browser restart.
@@ -310,10 +308,10 @@ async def _freshen_fleet(app) -> dict:
     # surface. ``last_seen_at`` / ``reject_reason`` / ``reject_at`` answer "when did
     # this instance last speak" and "why was it cut off", and nothing else on the MCP
     # side answers them. ``focused_window_id`` is the one field deliberately NOT
-    # carried over — ``list_windows`` (#46) reports the focused window per window,
+    # carried over — ``list_windows`` reports the focused window per window,
     # which is strictly more useful than a bare id.
     rows = {i["id"]: i for i in await db.read(state_read._read_instances)}
-    # session_id per active instance (#47): the epoch stamped alongside freshness so the
+    # session_id per active instance: the epoch stamped alongside freshness so the
     # agent can pin it as expected_session on a later mutating verb.
     sessions = await db.read(state_read._read_active_sessions)
     # The §11 capability report: what each copy ALLOWS, as it declared in its last hello.
@@ -361,7 +359,7 @@ async def list_instances(app) -> dict:
     Awaits a fresh snapshot from every active instance (§6 blocking-fresh, via
     :func:`_freshen_fleet`) before answering, so the ``instances`` map carries a mirror
     the agent has just refreshed — each entry ``{snapshot_at, fresh, reason, session_id}``
-    plus the mirror fields the envelope replaced. ``session_id`` is the #47 epoch to
+    plus the mirror fields the envelope replaced. ``session_id`` is the session epoch to
     echo back as ``expected_session``.
 
     ``stopped_at`` lets the agent tell a deliberate stop from a broken curator (§11).
@@ -386,14 +384,14 @@ async def list_instances(app) -> dict:
         "stopped_at": stopped_at,
         "resume_pending": bool(resume_raw),
         "pending_plan": state_read._parse_pending_plan(resume_raw),
-        # The one ceiling every caller-named timeout_ms is clamped to (#71).
+        # The one ceiling every caller-named timeout_ms is clamped to.
         "execute_js_max_timeout_ms": app.state.settings.execute_js_max_timeout_ms,
         "instances": instances,
     }
 
 
 def _project_tabs(rows: list[dict]) -> list[dict]:
-    """Adapter-side (#46) projection over the mirror rows: DROP ``fav_icon_url`` and add
+    """Adapter-side projection over the mirror rows: DROP ``fav_icon_url`` and add
     ``dup_group``.
 
     ``fav_icon_url`` has zero consumers on the agent side (the startpage draws a CSS
@@ -418,14 +416,14 @@ def _project_tabs(rows: list[dict]) -> list[dict]:
 
 async def list_tabs(app, *, instance: str | None = None, window_id: int | None = None,
                     url_contains: str | None = None) -> dict:
-    """Tabs mirror + per-instance freshness envelope (§11), with #46 filters + dup marking.
+    """Tabs mirror + per-instance freshness envelope (§11), with filters + dup marking.
 
     Awaits a fresh snapshot from every active instance (§6 blocking-fresh, via
     :func:`_freshen_fleet`) before returning the tabs, so the agent never acts on a
     mirror of unknown age (§11: else it re-opens a tab a human opened three minutes
     ago — permanently, in ``main`` where there is no dedup). The ``instances`` map
     carries ``{snapshot_at, fresh, reason, session_id}`` per instance — the age, freshness
-    and (#47) session epoch the agent must weigh before acting (``session_id`` echoes back
+    and session epoch the agent must weigh before acting (``session_id`` echoes back
     as ``expected_session``).
 
     Filters (all optional, intersecting) are applied in SQL by :func:`_read_tabs`:
@@ -455,7 +453,7 @@ async def list_tabs(app, *, instance: str | None = None, window_id: int | None =
 
 
 async def list_windows(app) -> dict:
-    """Per-window summary + per-instance freshness envelope (§11, #46).
+    """Per-window summary + per-instance freshness envelope (§11).
 
     One record per window — ``instance_id``, ``window_id``, ``type``, ``state``,
     ``tab_count`` and a ``focused`` flag — sourced from the ``windows`` table, a COUNT
@@ -623,7 +621,7 @@ async def _command(app, instance, command, params, *, auth_ctx, expected_session
     ``initiator='mcp'`` and ``auth_ctx`` = the MCP session (§12: js_audit records the
     session, never a token id). Command failures are surfaced as a ``ToolError`` so
     the agent sees the §6 error code instead of a transport-level fault — including
-    ``stale_session`` (#47), which rides the SAME generic mapping: when the agent pinned
+    ``stale_session``, which rides the SAME generic mapping: when the agent pinned
     ``expected_session`` and the browser has since restarted, ``send_command`` stamps the
     old session, the extension refuses with ``stale_session``, and it reaches the agent as
     a ToolError like any other §6 code.
@@ -652,7 +650,7 @@ async def _command(app, instance, command, params, *, auth_ctx, expected_session
 
 
 async def _reaped(app, instance: str, tab_id) -> bool:
-    """Whether the curator pass closed this tab ``open_tab`` leased (#72) — the one
+    """Whether the curator pass closed this tab ``open_tab`` leased — the one
     ``no_such_tab`` the agent could have prevented, told apart from "never existed" and
     "a human closed it". ``since`` keeps a close of an older tab with a reused id out."""
     held = await app.state.db.read(lambda c: get_tab_lease(c, instance, tab_id))
@@ -667,9 +665,9 @@ async def _reaped(app, instance: str, tab_id) -> bool:
     return row is not None
 
 
-# --- #49 bulk plumbing -------------------------------------------------------
+# --- bulk plumbing -----------------------------------------------------------
 def _require_exactly_one_target(tab_id, tab_ids) -> None:
-    """The tab_id / tab_ids XOR gate shared by close_tab / move_tab / relocate_tab (#49).
+    """The tab_id / tab_ids XOR gate shared by close_tab / move_tab / relocate_tab.
 
     EXACTLY ONE of the two must be given: both or neither -> ``invalid_args``. An empty
     ``tab_ids`` is ``invalid_args`` (a list form with nothing to do), and a DUPLICATE id
@@ -688,7 +686,7 @@ def _require_exactly_one_target(tab_id, tab_ids) -> None:
 
 
 def _reconcile_bulk_results(raw_results, items: list) -> list:
-    """Match the extension's per-item ``results`` back to the input by ``index`` (#49).
+    """Match the extension's per-item ``results`` back to the input by ``index``.
 
     The extension answers ONE frame carrying ``{results:[{index, ok, ...}]}``; the match
     key is the ``index`` (position in the input list) because an ``open_tab`` item has no
@@ -717,7 +715,7 @@ async def open_tab(app, *, instance: str, url: str, pinned: bool = False,
                    lease_ttl_s: int | None = None,
                    auth_ctx: str | None = None,
                    expected_session: str | None = None) -> dict:
-    """Open a tab in an instance (§6), optionally in a NAMED window (#45).
+    """Open a tab in an instance (§6), optionally in a NAMED window.
 
     ``window_id`` is optional: absent, this is exactly today's behaviour — the extension
     auto-selects the §9 window (the curator's own pass never names one). Given, the
@@ -785,7 +783,7 @@ async def open_tab(app, *, instance: str, url: str, pinned: bool = False,
         # `*lease_plan` carries an instance id that has PASSED `_validate_instance` — the
         # value is the same string the caller sent (that function checks, it does not
         # normalise), so what the tuple adds is the check having happened, not a transform.
-        # Remembered per TAB too (#72): navigate_tab carries it, and a reap reads tab_reaped.
+        # Remembered per TAB too: navigate_tab carries it, and a reap reads tab_reaped.
         out["lease"] = await _write_open_lease(app, *lease_plan, tab_id=result.get("tabId"))
     return out
 
@@ -794,7 +792,7 @@ async def close_tab(app, *, instance: str, tab_id: int | None = None,
                     tab_ids: list[int] | None = None,
                     auth_ctx: str | None = None,
                     expected_session: str | None = None) -> dict:
-    """Close ONE tab (``tab_id``, unchanged response shape) or a LIST (``tab_ids``, #49).
+    """Close ONE tab (``tab_id``, unchanged response shape) or a LIST (``tab_ids``).
 
     Bulk sends ONE ``close_tab {items}`` frame; the extension loops it and answers a
     per-item ``results`` array. The bulk close sends the SAME ``expect`` as the single
@@ -838,7 +836,7 @@ async def move_tab(app, *, instance: str, tab_id: int | None = None,
                    index: int | None = None, auth_ctx: str | None = None,
                    expected_session: str | None = None) -> dict:
     """Move one tab to a window/position INSIDE one browser (§6/§9), or — with
-    ``window_id=None`` — EXTRACT it into a brand-new background window (#45).
+    ``window_id=None`` — EXTRACT it into a brand-new background window.
 
     The gap this fills: relocation BETWEEN instances is the §7 open+close pair, which
     only works because the browsers are separate processes. Between the windows of one
@@ -855,7 +853,7 @@ async def move_tab(app, *, instance: str, tab_id: int | None = None,
     both surface here as a :class:`ToolError` carrying that code, which is exactly
     what makes the pinned refusal actionable rather than a generic failure.
 
-    ``window_id=None`` addresses "extract into a NEW window" (#45): it rides the frame
+    ``window_id=None`` addresses "extract into a NEW window": it rides the frame
     verbatim as ``windowId: null`` and the extension calls ``windows.create({tabId})``,
     returning the created window's id in the response ``windowId``. The pinned guard
     applies there too (that create strips ``pinned`` down the same Chromium path), and an
@@ -877,7 +875,7 @@ async def move_tab(app, *, instance: str, tab_id: int | None = None,
         result = await _command(app, instance, protocol.CMD_MOVE_TAB, params, auth_ctx=auth_ctx,
                                 expected_session=expected_session)
         return {"ok": True, "result": result}
-    # #49 bulk: ONE shared target window for the whole list. ``window_id=None`` (extract
+    # Bulk: ONE shared target window for the whole list. ``window_id=None`` (extract
     # into a NEW window) is refused for a list — ``windows.create`` takes ONE tabId, so
     # "one new window for all" vs "N windows" is a different, unrequested op.
     if window_id is None:
@@ -975,8 +973,8 @@ async def execute_js(app, *, instance: str, tab_id: int, code: str,
 
     ``await_promise`` (default False) makes the code the body of an async function in the
     page, so top-level ``await`` and ``return`` both work and the promise is awaited before
-    the value comes back. Without it the code goes through indirect eval exactly as before
-    — which supports neither, and is why async snippets used to answer ``null``.
+    the value comes back. Without it the code goes through indirect eval, which supports
+    neither (an async snippet answers ``null``).
 
     ``timeout_ms`` raises THIS command's socket budget (clamped to
     ``EXECUTE_JS_MAX_TIMEOUT_MS``) because async page code legitimately outlives
@@ -994,7 +992,7 @@ async def execute_js(app, *, instance: str, tab_id: int, code: str,
     await _ensure_not_paused(app)
     budget = _clamp_timeout_ms(app, timeout_ms)
     # VALIDATE BEFORE THE ROUND TRIP. `max_bytes` is only enforced after the response comes
-    # back, so a bad value used to cost a full command — and for THIS verb also a durable
+    # back, so a bad value would cost a full command — and for THIS verb also a durable
     # js_audit row recording code that was never going to be delivered.
     _validate_max_bytes(max_bytes)
     params: dict = {"tabId": tab_id, "code": code}
@@ -1012,7 +1010,7 @@ async def execute_js(app, *, instance: str, tab_id: int, code: str,
                                 cmd_timeout_ms=budget)
     except ToolError as exc:
         # The extension has no deadline of its own for execute_js: the clamped budget only
-        # surfaces as a socket `timeout`, so the note must ride the error too (#71).
+        # surfaces as a socket `timeout`, so the note must ride the error too.
         note = _clamp_note(app, timeout_ms)
         if note:
             raise ToolError(exc.code, exc.message, {**exc.payload, **note}) from exc
@@ -1077,7 +1075,7 @@ async def execute_js_debugger(app, *, instance: str, tab_id: int, code: str,
     except ToolError as exc:
         # A snippet cut at the clamped deadline comes back as an error (V8's termination as
         # precondition_failed, or a socket timeout), so the note must ride it, as in
-        # execute_js (#71).
+        # execute_js.
         note = _clamp_note(app, timeout_ms)
         if note:
             raise ToolError(exc.code, exc.message, {**exc.payload, **note}) from exc
@@ -1089,7 +1087,7 @@ async def execute_js_debugger(app, *, instance: str, tab_id: int, code: str,
 async def get_text(app, *, instance: str, tab_id: int, selector: str | None = None,
                    max_bytes: int | None = None, auth_ctx: str | None = None,
                    expected_session: str | None = None) -> dict:
-    """Read a tab's text — the cheap read that used to require ``execute_js`` (§11).
+    """Read a tab's text — the cheap read that does not need ``execute_js`` (§11).
 
     NOT behind the execute_js checkbox and writing NO ``js_audit`` row, and that is a
     deliberate line rather than an oversight: the gate exists because ARBITRARY code
@@ -1367,7 +1365,7 @@ async def scroll_until(app, *, instance: str, tab_id: int, count_selector: str,
     would spin to its deadline at a flat count. Focusing fixes that but takes the screen away
     from the human, so it is an explicit opt-in, not the default — and the second resort:
     ``set_focus_emulation`` makes the hidden tab ``visible`` too while leaving the screen
-    alone (measured on avito, #73), so it is what the tool description sends a flat
+    alone (measured on avito), so it is what the tool description sends a flat
     background scroll to first. A count that stays flat in a visible tab is a collapsed block
     or a "show more" button that scrolling does not open; neither cure applies to it.
 
@@ -1407,7 +1405,7 @@ async def scroll_until(app, *, instance: str, tab_id: int, count_selector: str,
         "rounds": int(result.get("rounds") or 0),
         "stopped": result.get("stopped"),
         "elapsed_ms": int(result.get("elapsedMs") or 0),
-        # #74: "stable" alone cannot tell "grew, then ran out" from "never moved". Passed
+        # "stable" alone cannot tell "grew, then ran out" from "never moved". Passed
         # through as-is, so an extension that predates them answers null, not a made-up 0.
         "count_start": result.get("countStart"),
         "scrolled_px": result.get("scrolledPx"),
@@ -1521,10 +1519,10 @@ async def set_focus_emulation(app, *, instance: str, tab_id: int, enabled: bool,
                               expected_session: str | None = None) -> dict:
     """Toggle ``Emulation.setFocusEmulationEnabled`` on a tab via chrome.debugger (§12).
 
-    The first verb down the CDP path (wave 18). It makes a BACKGROUND tab behave as focused
+    It makes a BACKGROUND tab behave as focused
     and visible — no timer throttling, ``document.hasFocus()`` true, ``document.visibilityState``
     ``visible``, so IntersectionObserver feeds load — WITHOUT taking the screen from the human
-    (measured on avito, #73). STATEFUL by nature: the
+    (measured on avito). STATEFUL by nature: the
     emulation holds ONLY while the debugger stays attached, so ``enabled=true`` attaches and
     KEEPS the debugger attached, and ``enabled=false`` turns it off and detaches.
 
@@ -1551,7 +1549,7 @@ async def set_focus_emulation(app, *, instance: str, tab_id: int, enabled: bool,
     return {"ok": True, "enabled": bool(result.get("enabled"))}
 
 
-# --- WebSocket-frame capture (§12, wave 21) ----------------------------------
+# --- WebSocket-frame capture (§12) -------------------------------------------
 async def start_ws_capture(app, *, instance: str, tab_id: int,
                            auth_ctx: str | None = None,
                            expected_session: str | None = None) -> dict:
@@ -1656,8 +1654,7 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
     """Point a tab at a url (§6), optionally waiting for the page to be there.
 
     ``wait_until`` defaults to ``'none'`` — the frame then carries no wait key at all, the
-    extension behaves exactly as it always has (issue the update, answer ``{ok:true}``), and
-    the ANSWER is the unchanged ``{ok, result}``. ``'load'`` waits for the tab to report
+    extension issues the update and answers ``{ok:true}``, and the ANSWER is ``{ok, result}``. ``'load'`` waits for the tab to report
     ``complete``; ``'selector'`` waits for ``selector`` to match. A wait that expires is a
     SUCCESS carrying ``matched: false`` — never an error: the tab was pointed at the url
     either way, so the negative is a verdict, not the "state unknown" that ``timeout``
@@ -1671,7 +1668,7 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
     would have to learn from prose.
 
     AN OLD EXTENSION IS REFUSED, NEVER GUESSED AT. This is an OLD command with a NEW
-    parameter, so a pre-wave bundle ignores ``waitUntil``, navigates and answers a bare
+    parameter, so an older bundle ignores ``waitUntil``, navigates and answers a bare
     ``{ok:true}`` — a frame with no ``matched`` key, which would otherwise be read as
     ``matched: false`` and hand the agent a verdict nobody reached. It raises
     ``extension_too_old`` instead, for the same reason ``open_tab`` cross-checks
@@ -1680,8 +1677,8 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
     ``precondition_failed`` (which on this verb means "fix your argument") nor a §6 wire
     constant.
 
-    The http/https edge guard is the extension's and is unchanged (§12: a caller must not
-    be able to steer a tab to ``data:``/``javascript:``). §7/§5 note, also unchanged: the
+    The http/https edge guard is the extension's (§12: a caller must not be able to steer
+    a tab to ``data:``/``javascript:``). §7/§5 note: the
     navigation's document change stamps the tab's activity clock, so a navigated tab reads
     as freshly touched — it errs SAFE (a too-fresh tab is never wrongly closed) and
     self-heals within IDLE_MINUTES."""
@@ -1706,7 +1703,7 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
         # No wait asked for: the pre-wave answer, byte for byte. The extension's frame is a
         # bare {ok:true} here, and the reset path (§8) — `rules_api.perform_reset`, which
         # sends CMD_NAVIGATE_TAB itself rather than calling this verb — depends on the same
-        # shape at the layer below. A leased tab adds `lease` (#72), nothing else.
+        # shape at the layer below. A leased tab adds `lease`, nothing else.
         return {"ok": True, "result": result, **lease}
     if "matched" not in result:
         # AN OLD EXTENSION CANNOT SAY "NO", so we must not say it for it. `navigate_tab` is
@@ -1753,7 +1750,7 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
 
 async def wake_tab(app, *, instance: str, tab_id: int, auth_ctx: str | None = None,
                    expected_session: str | None = None) -> dict:
-    """Wake a DISCARDED tab (issue #68): reload it and wait for the page to load.
+    """Wake a DISCARDED tab — reload it and wait for the page to load.
 
     The browser unloads an idle tab from memory to save RAM. The tab still EXISTS — it answers
     ``list_tabs`` with its url — but every injecting/attaching verb (``get_text``, ``execute_js``,
@@ -1787,7 +1784,7 @@ async def wake_tab(app, *, instance: str, tab_id: int, auth_ctx: str | None = No
     return {"ok": True, "was_discarded": bool(result.get("wasDiscarded"))}
 
 
-# --- relocate: synchronous open + guarded source close in one call (#48, §11) ---
+# --- relocate: synchronous open + guarded source close in one call (§11) ---------
 def _read_relocate_inputs(instance_from: str, tab_id: int, instance_to: str):
     """Reader ``fn(conn)``: the source tab row (incl. pinned/audible/active), both
     instances' current sessions, and the SOURCE instance's focused window id.
@@ -1795,7 +1792,7 @@ def _read_relocate_inputs(instance_from: str, tab_id: int, instance_to: str):
     Returns ``(tab, session_from, session_to, focused_window_id_from)`` where ``tab`` is
     the source tabs row (or None). The sessions come from the ``instances`` mirror; the
     caller prefers a live ``ConnState`` session when one exists (same order phase A uses).
-    ``pinned`` / ``audible`` / ``active`` and ``focused_window_id_from`` are read (#48) so
+    ``pinned`` / ``audible`` / ``active`` and ``focused_window_id_from`` are read so
     the caller can refuse a source that phase B's step-4 close guards could never close —
     BEFORE it opens an un-closeable copy."""
     import sqlite3
@@ -1829,7 +1826,7 @@ def _read_relocate_inputs(instance_from: str, tab_id: int, instance_to: str):
 
 
 def _read_bulk_relocate_inputs(instance_from: str, tab_ids: list[int], instance_to: str):
-    """Reader ``fn(conn)`` for the BULK relocate (#49): every source tab row keyed by
+    """Reader ``fn(conn)`` for the BULK relocate: every source tab row keyed by
     ``tab_id``, both instances' sessions, the source's focused window id, AND the set of
     FULL url strings the TARGET already holds (for the batch dedup).
 
@@ -1877,10 +1874,10 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
                        tab_ids: list[int] | None = None, instance_to: str,
                        auth_ctx: str | None = None,
                        expected_session_from: str | None = None) -> dict:
-    """MCP-initiated relocation, completed SYNCHRONOUSLY in one call (#48).
+    """MCP-initiated relocation, completed SYNCHRONOUSLY in one call.
 
-    The MCP verb now attempts BOTH phases: phase A opens the copy in the target and
-    writes the live ``relocate`` row, and — new here — a synchronous phase B closes the
+    The MCP verb attempts BOTH phases: phase A opens the copy in the target and
+    writes the live ``relocate`` row, and a synchronous phase B closes the
     source under §7's step-4 volatile close guards. It walks this state machine:
 
     * ``opening``  — the guards pass and the copy is opened;
@@ -1888,17 +1885,16 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
     * ``done``     — the source closed: the pair ``relocate``(done) + ``relocate_close``
       (done) is journalled and the source mirror row is removed;
     * ``half``     — the copy is open but the source close could not be completed
-      (precondition / uncertain / copy vanished): this is TODAY'S normal state, NOT an
-      error — the source is left alive and the pass's phase B / reconcile finishes it
-      later. The synchronous path degrades to exactly what phase-A-only used to do.
+      (precondition / uncertain / copy vanished): a normal state, NOT an error — the
+      source is left alive and the pass's phase B / reconcile finishes it later.
 
-    The curator pass stays two-phase; nothing in ``src/curator/`` changes. Undo works
+    The curator pass stays two-phase. Undo works
     through a synthetic ``pass_id`` (``mcp-<uuid>``) stamped on both halves and returned
     as ``undo_pass_id`` — no ``passes`` row is written, so metrics and ``_read_last_pass``
     never see it and a double undo is safe (``restored_at`` → ``already_undone``).
 
-    ``tab_ids`` (#49) relocates a LIST as one unit: ONE ``open_tab {items}`` frame to the
-    target then ONE ``close_tab {items}`` frame to the source, each item running the #48
+    ``tab_ids`` relocates a LIST as one unit: ONE ``open_tab {items}`` frame to the
+    target then ONE ``close_tab {items}`` frame to the source, each item running the single-tab
     machinery independently and getting its own ``status`` (done/half). The whole call
     shares ONE ``pass_id`` so ``undo_pass_id`` reverses the batch as a unit. See
     :func:`_relocate_bulk`."""
@@ -1925,7 +1921,7 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
     session_from = cs_from.session_id if cs_from is not None else db_session_from
     session_to = cs_to.session_id if cs_to is not None else db_session_to
 
-    # guard 3, #47 session epoch — SOURCE side. A pre-check BEFORE phase A opens any copy:
+    # guard 3, session epoch — SOURCE side. A pre-check BEFORE phase A opens any copy:
     # a mismatch means the source browser has restarted since the agent read the session,
     # its ``tab_id`` is from a dead epoch, and relocating it would copy a stale tab and
     # later close the wrong one. Refuse with ``stale_session`` and touch nothing. The
@@ -1939,7 +1935,7 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
             "(the source browser restarted); relocation refused",
         )
 
-    # guard 4 (#48): a pinned / audible / active-in-focused-window source can NEVER be
+    # guard 4: a pinned / audible / active-in-focused-window source can NEVER be
     # closed by phase B's step-4 close guards (notPinned / notAudible / not-active-in-
     # focus). Opening the copy first and only THEN discovering the source is un-closeable
     # would leave the copy live and strike the source pair toward quarantine on every
@@ -1983,14 +1979,14 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
     )
     tab_id_to = result.get("tabId")
     window_id_to = result.get("windowId")
-    # Same guard as phase A (SUGGESTION 6): never write a relocate row pointing at a
+    # Same guard as phase A: never write a relocate row pointing at a
     # non-int copy id — a live row aimed at a phantom copy. Better no row at all.
     if not isinstance(tab_id_to, int) or isinstance(tab_id_to, bool):
         raise ToolError(
             "open_failed", f"open_tab returned no integer tabId ({tab_id_to!r})"
         )
 
-    # The synthetic pass id (#48) — ONE per verb call, generated BEFORE the insert (never
+    # The synthetic pass id — ONE per verb call, generated BEFORE the insert (never
     # from lastrowid) and stamped on BOTH halves so ``undo_pass`` reaches the pair via
     # ``_read_pass_actions``.
     pass_id = f"mcp-{uuid4()}"
@@ -2069,8 +2065,7 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
     # step 6: close the SOURCE with the step-4 volatile guards — url / notAudible /
     # notPinned — but deliberately NO ``minIdleMs``. The idle threshold protects AUTOMATION
     # from a tab a human is using; here the agent explicitly chose this tab, and minIdleMs
-    # would refuse exactly the tab it asked to move (today's MCP close sends no ``expect``
-    # at all, so this is a tightening). ``expected_session_from`` (#47) is stamped so a
+    # would refuse exactly the tab it asked to move. ``expected_session_from`` is stamped so a
     # source restart between the guard-3 pre-check and here is refused (``stale_session``)
     # by the extension edge instead of closing the wrong tab.
     expect = {"url": url, "notAudible": True, "notPinned": True}
@@ -2117,10 +2112,10 @@ async def relocate_tab(app, *, instance_from: str, tab_id: int | None = None,
 
 async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instance_to: str,
                          auth_ctx: str | None, expected_session_from: str | None) -> dict:
-    """Relocate a LIST from ``instance_from`` to ``instance_to`` in THREE frames (#49).
+    """Relocate a LIST from ``instance_from`` to ``instance_to`` in THREE frames.
 
     ONE ``open_tab {items}`` to the target, ONE ``get_tab {items}`` copy-check to the target,
-    then ONE ``close_tab {items}`` to the source; each item runs #48's synchronous machinery
+    then ONE ``close_tab {items}`` to the source; each item runs the single-tab synchronous machinery
     independently. The whole call shares ONE ``pass_id = mcp-<uuid>``, so undo reverses the
     batch as a unit.
 
@@ -2128,7 +2123,7 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
 
     * a source that phase B could NEVER close — pinned / audible / active-in-focus — is
       refused BEFORE its copy opens: ``ok:false`` (opening an un-closeable copy would
-      strike the pair toward quarantine on every refused close, as in #48 guard 4);
+      strike the pair toward quarantine on every refused close, as in the single form's guard 4);
     * DEDUP is required: ``decide`` protects a pass from opening two copies of one address,
       but this ``open_tab {items}`` frame has no such guard — five sources with one url
       would make five permanent copies. Items are deduped by FULL url string against BOTH
@@ -2136,7 +2131,7 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
       gets ``ok:false, error:"duplicate"``;
     * an item whose phase A (open) failed gets ``ok:false``;
     * an opened copy whose source closed is ``ok:true, status:"done"``; one whose source
-      close could not complete is ``ok:true, status:"half"`` — today's normal state, the
+      close could not complete is ``ok:true, status:"half"`` — a normal state, the
       pass's phase B finishes it later;
     * an opened copy that VANISHED before the source close (a target restart caught by the
       get_tab copy-check) is ``ok:true, status:"half", reason:"copy_gone"`` — its source is
@@ -2176,7 +2171,7 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
         if tab is None:
             results[i] = {"index": i, "ok": False, "error": "no_such_tab", "tab_id": tid}
             continue
-        # #48 guard 4, per item: a pinned/audible/active-in-focus source can never be
+        # Guard 4, per item: a pinned/audible/active-in-focus source can never be
         # closed by phase B — do not open an un-closeable copy for it.
         if tab["pinned"]:
             results[i] = {"index": i, "ok": False, "error": protocol.ERR_PRECONDITION_FAILED,
@@ -2234,7 +2229,7 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
 
     # Steps 3+4 for every live item in ONE transaction: the copy's mirror row + the live
     # ``relocate``(done) + the ``relocate_close``(pending) marker (the at-least-once
-    # discipline of #48, all under the shared pass_id).
+    # discipline of the single form, all under the shared pass_id).
     def _write_pairs(conn):
         from src.curator.phases import _insert_copy_tab
 
@@ -2276,13 +2271,13 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
         return {"index": i, "ok": True, "tab_id_to": tid_to, "instance_to": instance_to,
                 "undo_pass_id": pass_id, "tab_id": tab["tab_id"]}
 
-    # COPY CHECK (#48's guard, per item, over the batch): before closing any source,
+    # COPY CHECK (the single form's guard, per item, over the batch): before closing any source,
     # confirm every copy still exists on the target. A target restart between phase A and
     # now would have destroyed the copies; the phase B close still matches
     # expect{url,notAudible,notPinned} and would delete the sources — an IRRECOVERABLE loss
     # with no pending row left to reconcile. ONE get_tab {items} to the target, NO
-    # ``expected_session`` (reading a restarted target is fine, as #48 single does). This
-    # makes bulk relocate 3 frames (open, get_tab, close) — consistent with #48's 3 commands;
+    # ``expected_session`` (reading a restarted target is fine, as the single form does). This
+    # makes bulk relocate 3 frames (open, get_tab, close) — consistent with the single form's 3 commands;
     # correctness over the 2-frame budget.
     check_items = [{"tabId": tid_to} for (_i, _tab, tid_to, _win) in live]
     try:
@@ -2311,7 +2306,7 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
     if not present:  # every copy vanished — no source to close, pending rows left for reconcile.
         return {"ok": True, "undo_pass_id": pass_id, "results": results}
 
-    # Phase B: ONE close_tab {items} frame to the SOURCE, stamped with the pinned #47
+    # Phase B: ONE close_tab {items} frame to the SOURCE, stamped with the pinned
     # epoch. The step-4 guards (url/notAudible/notPinned, deliberately NO minIdleMs — the
     # agent explicitly chose these tabs) ride per item.
     close_items = []
@@ -2356,7 +2351,7 @@ async def _relocate_bulk(app, *, instance_from: str, tab_ids: list[int], instanc
         else:  # no_result / connection-class / any other UNKNOWN per-item code: uncertain.
             # Report ``half`` but LEAVE the row ``pending`` (append NO resolution) — reconcile
             # checks the mirror. Never ``failed``, which a later pass would blindly retry; this
-            # mirrors #48 single's UNKNOWN/connection-class close.
+            # mirrors the single form's UNKNOWN/connection-class close.
             reason = cr.get("error") or "no_result"
             results[i] = {**_base(i, tab, tid_to), "status": "half", "reason": reason}
 
@@ -2497,7 +2492,7 @@ async def _write_open_lease(app, instance_id: str, url: str, until: int,
     RUNTIME fault (a degraded DB, a disk full) — never a bad argument, which is refused
     before the browser is touched at all.
 
-    With ``tab_id`` (open_tab), the per-tab row (#72) is written in the SAME transaction,
+    With ``tab_id`` (open_tab), the per-tab row is written in the SAME transaction,
     so a fault in either is the one reported ``lease_write_failed`` and never an exception
     out of ``open_tab``; ``_carry_lease`` passes none and keeps the tab's existing row."""
     def _write(c):
@@ -2514,7 +2509,7 @@ async def _write_open_lease(app, instance_id: str, url: str, until: int,
 
 async def _carry_lease(app, instance: str, tab_id: int, url: str) -> dict:
     """``{"lease": ...}`` re-issuing the live lease ``open_tab`` took on this tab for the url
-    ``navigate_tab`` just sent it to, with the SAME deadline (#72); ``{}`` when it holds none.
+    ``navigate_tab`` just sent it to, with the SAME deadline; ``{}`` when it holds none.
 
     The pass matches a lease against the tab's LIVE url, so the agent's own navigation
     dropped it as silently as a redirect does. The url already passed the extension's
@@ -2541,10 +2536,10 @@ async def pause(app, *, minutes: int | None = None) -> dict:
     """Stop the curator INDEFINITELY: write ``curator_stopped_at`` + bump the fencing
     epoch (fences an in-flight pass). Not itself a "mutating verb" the stop refuses.
 
-    The tool KEEPS its historical name (``pause``) for API stability, but there is no
-    duration anymore: the stop lasts until ``resume``. ``minutes`` is accepted for
-    backward compatibility with older agent configs and IGNORED — the same write-shape
-    as ``POST /api/pause``, which likewise ignores its former body."""
+    The tool is named ``pause`` for API stability, but the stop has no duration: it
+    lasts until ``resume``. ``minutes`` is accepted for compatibility with older agent
+    configs and IGNORED — the same write-shape as ``POST /api/pause``, which likewise
+    ignores its body."""
     del minutes  # accepted for compatibility, deliberately ignored (the stop is indefinite)
     now = _now_ms()
     stopped_at = await app.state.db.write(lambda c: pause_ops.stop(c, now=now))
@@ -2555,9 +2550,7 @@ async def resume(app) -> dict:
     """Start the curator (§7/§12): apply the TTL shift on the ACTUAL stop duration,
     clear ``curator_stopped_at``, THEN run a pass immediately — the SAME
     :func:`src.api.pause.resume_now` core ``DELETE /api/pause`` runs. §7 makes the
-    immediate pass part of what "start by hand" MEANS; stopping after the settings
-    write left the same verb with two behaviours depending on which door it was called
-    through, and an agent's resume left the curator idle until the next tick.
+    immediate pass part of what "start by hand" MEANS, on both doors.
 
     Whether that pass CONFIRMS the over-threshold plan latch (``resume_pending``)
     follows ``resume_now``'s two meanings of the one verb: a resume that lifts an
@@ -2568,14 +2561,9 @@ async def resume(app) -> dict:
     as the agent's "yes, run the big plan" verb. With nothing armed at all the
     confirm degrades to an ordinary pass inside the runner.
 
-    KNOWN COST, accepted deliberately: this BLOCKS for the whole pass — tens of
-    seconds on a large fleet — where it used to be one settings write. Detaching the
-    pass and answering immediately was considered and rejected, because it would restore
-    exactly the divergence just removed: ``DELETE /api/pause`` returns the pass RESULT
-    (the startpage shows what the resume did), so a fire-and-forget MCP twin would again
-    be the same verb with two meanings. If the wait becomes a real problem it must be
-    changed on BOTH doors at once — and the pass is idempotent under the lease, so a
-    client that times out has not lost anything: the pass runs to completion regardless
-    and its outcome is readable from ``passes`` / ``list_actions``."""
+    This BLOCKS for the whole pass — tens of seconds on a large fleet — because
+    ``DELETE /api/pause`` returns the pass RESULT too; change both doors together. A
+    client that times out loses nothing: the pass runs to completion under the lease and
+    its outcome is readable from ``passes`` / ``list_actions``."""
     outcome = await pause_api.resume_now(app)
     return {"ok": True, **outcome}

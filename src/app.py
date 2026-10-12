@@ -179,10 +179,6 @@ def create_app(settings) -> Starlette:
             background_tasks.append(
                 asyncio.create_task(_curator_driver(app, db, settings))
             )
-            # (There used to be a third loop here: a TICK_MS sweep that physically deleted
-            # expired `enroll_requests`. Enrolment is one step now — a request never
-            # becomes a row that could go stale — so the table, its TTL and the sweep are
-            # all gone, §6.)
         else:
             logger.warning(
                 "degraded mode: nightly backup and retention loops not started"
@@ -206,16 +202,9 @@ def create_app(settings) -> Starlette:
             await db.close()
 
     routes = [
-        # `/` exists ONLY so the bare service address opens something. Typing the host
-        # into a browser used to answer a naked "Not Found", which reads as "the service
-        # is down" — the operator then has to KNOW that the console lives at /admin and
-        # that an unauthenticated visit needs /admin/login. That is internal routing
-        # knowledge, and nothing should require it. The redirect lands on /admin, which
-        # already forwards an unauthenticated browser to the login form (303, see
-        # src/api/admin_page.py), so one hop covers both the logged-in and the logged-out
-        # case. 307 (not 303) because it is a permanent-shaped GET redirect that must not
-        # be cached as permanent: the console path may move, and a 301 would stick in
-        # every browser forever.
+        # `/` exists ONLY so the bare service address opens something: /admin, which
+        # forwards an unauthenticated browser to the login form (src/api/admin_page.py).
+        # 307, not 301: a permanent redirect would stick in every browser.
         Route("/", lambda _r: RedirectResponse("/admin", status_code=307), methods=["GET"]),
         Route("/healthz", healthz, methods=["GET"]),
         # Prometheus scrape (§12): SEPARATE METRICS_TOKEN Bearer, read-only, and
@@ -274,9 +263,9 @@ def create_app(settings) -> Starlette:
         # reads / closes the enrollment window and lists/revokes instances. There is no
         # approve/reject pair and no pending list — an enroll_request with a valid code
         # into an open window enrols itself over /ext (§6). JSON only — the HTML console
-        # (#36) renders this API. Reads are allowed in degraded mode; the mutating verbs
+        # renders this API. Reads are allowed in degraded mode; the mutating verbs
         # (revoke / window arm+close) answer 503 while degraded.
-        # /admin HTML console (§13, issue #36) — the presentation layer over the JSON API
+        # /admin HTML console (§13) — the presentation layer over the JSON API
         # above. Serving is by EXPLICIT handlers (never StaticFiles) so every HTML/asset
         # response can carry the CSP header. GET /admin is auth-gated (cookie OR Bearer)
         # and, being the only surface here reached from the address bar, answers a
@@ -306,14 +295,13 @@ def create_app(settings) -> Starlette:
         WebSocketRoute("/ext", ext_channel),
     ]
     # CORS for /api/* (§12): ANY origin, credentials off — the lock on /api/* is
-    # require_api_caller, not the browser's origin check (see src/api/cors.py for why the
-    # old allow-list was removed). The middleware ignores non-http scopes (so the /ext
+    # require_api_caller, not the browser's origin check (see src/api/cors.py). The middleware ignores non-http scopes (so the /ext
     # WebSocket is untouched) and /metrics/healthz scrapes (no Origin header) are
     # unaffected either way.
     middleware = [
         Middleware(CountingCORSMiddleware, **cors_kwargs()),
         # Stamp X-Content-Type-Options: nosniff on every /admin response (HTML/asset AND
-        # the JSON API). Header-only, so it never alters a JSON body/status (§13, #36).
+        # the JSON API). Header-only, so it never alters a JSON body/status (§13).
         Middleware(AdminSecurityHeadersMiddleware),
     ]
     app = Starlette(

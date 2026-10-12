@@ -56,20 +56,9 @@ function clockLabel(ms) {
 
 // ONE url parse per row, done ONCE in a computed — never in the template.
 //
-// The template used to call `swatchColor(hostOf(t.url))`, `cleanTitle(t.title, t.url)`
-// (which parses the url AGAIN inside) and `hostOf(t.url)` on every row: three `new URL`
-// per row, re-run on EVERY render. And a render happens every second — store.tick()
-// moves `clockTick`, which `foreignGroups`/`statusRows` read, so the
-// whole component re-renders once a second whether or not anything moved.
-//
-// MEASURED, A/B in one process, on a 452-row profile (200 own tabs in 6 windows, 160
-// foreign, 40 bookmarks, 40 history rows) by counting `new URL` constructions per tick:
-//   inline template  1276 parses per tick   ≈0.5-0.7 ms of pure parsing, every second
-//   row views           0 parses per tick
-// (wall-clock per tick over the same rows: 10.1 -> 8.4 ms best-of-12, 16.1 -> 14.1 ms
-// median; the machine was too noisy for the wall clock to be the evidence — the parse
-// count is.) The old template was `{{ t.title || t.url }}` and cost nothing per row —
-// this is the regression the row views pay back.
+// The component re-renders every second (store.tick() moves `clockTick`, which
+// `foreignGroups`/`statusRows` read), so per-row `new URL` in the template is paid every
+// second: measured 1276 parses per tick on a 452-row profile, 0 with these row views.
 //
 // The computeds below read ONLY the tab/bookmark/history data and the search string
 // (never `clockTick`), so a tick re-renders from already-computed strings.
@@ -158,13 +147,8 @@ export default {
       if (editingBookmarkId.value !== bookmark.id) return;
       editingBookmarkId.value = null;
       const typed = String(title || "").trim();
-      // AN EMPTY FIELD IS A RENAME, NOT A CANCEL. Dropping it silently (the old
-      // `if (!next) return`) closed the editor and left the old name in place —
-      // visually indistinguishable from Esc, so the human cannot tell whether the
-      // browser refused, the click missed, or nothing was sent at all.
-      //
-      // Of the two ways out, this one keeps the editor's contract intact: Enter/blur
-      // ALWAYS commit, Esc is the only cancel. Refusing to close on an empty field
+      // AN EMPTY FIELD IS A RENAME, NOT A CANCEL. Silently dropping it would look
+      // exactly like Esc. Enter/blur ALWAYS commit, Esc is the only cancel. Refusing to close on an empty field
       // would mean fighting a blur — the human clicked somewhere else, and re-focusing
       // an input they just left traps them in it with no keyboard way out.
       // So an empty title falls back to the SAME name the row would show anyway
@@ -296,7 +280,7 @@ export default {
     // --- stop status bar (§7) ----------------------------------------------
     // The stop is INDEFINITE — a server stamp, not a deadline — so nothing here
     // ticks: a plain null-check decides the row. (The four instance states still
-    // ride the store's ticking serverNow; that clock just no longer feeds this row.)
+    // ride the store's ticking serverNow.)
     let clockTimer = null;
     const isStopped = computed(() => store.stoppedAt.value != null);
     // Date + time for the stopped row only: an indefinite stop can span days, and a
@@ -321,8 +305,8 @@ export default {
     async function onRunRulesNow() {
       await store.runRulesNow();
     }
-    // What the last «выполнить все правила сейчас» pass did (#66). The bare status read
-    // «ok» for twelve moves and for none alike, so an executed pass names its outcome:
+    // What the last «выполнить все правила сейчас» pass did. An executed pass names its
+    // outcome:
     // the count of actions it really performed (`actions_performed`, NOT
     // `actions_count`, which also counts deferred / failed journal rows), or at zero
     // the reason for zero — planned actions it could not perform (with the most
@@ -579,8 +563,7 @@ export default {
 
     onMounted(async () => {
       // The 1s clock ticks regardless of autostart: the four instance states (§10)
-      // must keep updating on a purely offline first paint. (The stop row no longer
-      // needs it — an indefinite stop has nothing to count down.)
+      // must keep updating on a purely offline first paint.
       if (typeof setInterval !== "undefined") {
         clockTimer = setInterval(() => store.tick(), 1000);
       }

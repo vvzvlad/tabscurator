@@ -1,18 +1,12 @@
-// Connection lifecycle (§6) — the REPORTING half: read instance config, own the
-// ids, connect the WSS /ext socket, say hello, answer snapshot_request and ping.
-// Command RECEIVING / execution (open_tab/close_tab/execute_js) is the NEXT
-// phase — a `command` frame is logged and handed to an injectable hook here, the
-// verbs are NOT implemented.
+// Connection lifecycle (§6): read instance config, own the ids, connect the WSS /ext
+// socket, say hello, answer snapshot_request and ping. A `command` frame is handed to an
+// injectable hook (commands.js executes it).
 //
-// Reconnect is driven by chrome.alarms (period TICK_MS = 60 s), NOT a timer
-// inside the worker: the alarm handler unconditionally ensures an open socket,
-// independent of in-memory state, and at 60 s the worker actually dies and gets
-// resurrected so the mechanism is exercised (§6). Reconnect is alarm-only at a
-// FIXED 60 s period, which is itself what stops a bad token from hammering once a
-// second (the donor's bug, §6). Connection state is ack-gated: `helloAcked` flips
-// true ONLY on hello_ack{ok:true}, never on socket `open`. A real backoff counter
-// belongs with the deferred sub-minute "no ping" retry timer; there is no
-// sub-alarm retry yet, so none is kept here.
+// Reconnect is driven by chrome.alarms (period TICK_MS = 60 s), not a timer inside the
+// worker: the alarm handler ensures an open socket independent of in-memory state, and
+// the fixed 60 s period keeps a bad credential from hammering the service (§6).
+// Connection state is ack-gated: `helloAcked` flips true only on hello_ack{ok:true},
+// never on socket `open`.
 //
 // The module is dependency-injected via an `env` so the same code runs under the
 // browser (real chrome/WebSocket globals) and under vitest (a fake env).
@@ -24,14 +18,10 @@ import { PROTOCOL_VERSION } from "./constants.js";
 // without Web Crypto in node.
 export function chromeEnv() {
   return {
-    // A bundle MAY still ship an instance.json — the ONLY shape it may have is
+    // A bundle MAY ship an instance.json of the shape
     // `{"serviceUrl": "wss://host", "title": "..."}`, both optional, both mere defaults
-    // for the operator settings. It is NO LONGER the credential source: the shared
-    // `token` and the self-reported `instanceId` are GONE (§7) and nothing reads them.
-    // (This comment replaces the old instance.example.json, which was DELETED: it shipped
-    // inside every bundle — the generator's copy filter skips `instance.json`, not
-    // `*.example.json` — and described the REJECTED option B, "only its sha256 goes on
-    // the wire", to the whole fleet.) Read best-effort; a missing/invalid file is fine.
+    // for the operator settings; it carries no credential (§7). Read best-effort; a
+    // missing/invalid file is fine.
     getInstanceConfig: async () => {
       try {
         const url = chrome.runtime.getURL("instance.json");
@@ -92,18 +82,14 @@ function bytesToHex(bytes) {
 }
 
 // The durable enroll facts, with defaults for a never-touched profile.
-//   requestPending: an enrolment was submitted and has not been ACCEPTED yet. It is not a
-//     "waiting for an operator" flag anymore — there is nobody to wait for (§6) — only
-//     "keep sending the enroll_request while a code is staged", which matters because the
-//     MV3 worker can die between the operator's click and the socket opening.
+//   requestPending: an enrolment was submitted and has not been ACCEPTED yet, i.e. "keep
+//     sending the enroll_request while a code is staged" — the MV3 worker can die between
+//     the operator's click and the socket opening.
 //   quarantineProbe: a DURABLE 0/1/2 cursor cycling the quarantine opening frame across
 //     cold-worker reconnects (0=enroll_request(pending), 1=hello(old), 2=hello(pending));
 //     an in-memory cursor would reset to the same phase on every ~30 s worker death.
 //   enrollReject: the last enroll_rejected reason (bad_code/closed/id_taken/bad_id/…),
 //     surfaced via get_connection_state so the UI shows WHY instead of nothing.
-// (`requestRegisteredAt` is gone with the `enroll_pending` frame: it timestamped the
-// service's confirmation that it held a request awaiting approval, and no such state
-// exists — the very next frame is the verdict.)
 const DEFAULT_ENROLL_FACTS = {
   requestPending: false,
   approved: false,
@@ -235,8 +221,7 @@ export class Connection {
   }
 
   // The service address + the reason it was refused, if it was (§7). The operator
-  // setting wins; a bundle's instance.json serviceUrl is only a bootstrap fallback (the
-  // token/instanceId it used to carry are gone, §7).
+  // setting wins; a bundle's instance.json serviceUrl is only a bootstrap fallback.
   //
   // The TLS gate lives HERE, at the single place every consumer resolves the address
   // through — the /ext socket, the popup's and the startpage's /api Bearer, the
@@ -297,9 +282,8 @@ export class Connection {
   // revoked (secret already wiped) → quarantined → approved → needs-enroll.
   //
   // There is no intermediate state between needs-enroll and approved: an enroll_request is
-  // answered on the spot, so a browser is either enrolled or not. A generated-but-not-yet
-  // -accepted secret used to read "pending"; it now reads needs-enroll, which is the truth
-  // — the service has no row for it — and the last refusal REASON is reported alongside.
+  // answered on the spot. A generated-but-not-yet-accepted secret reads needs-enroll (the
+  // service has no row for it), with the last refusal REASON reported alongside.
   async getEnrollState() {
     const facts = await this._loadEnrollFacts();
     const hasActive = !!(await this._readSecretHex(INSTANCE_SECRET_KEY));
@@ -313,11 +297,8 @@ export class Connection {
   }
 
   // Persist the facts a resurrected worker cannot re-derive. Called on inbound frames
-  // OTHER than `command`, not only on hello_ack: an MV3 worker dies between events, so
-  // persisting only at ack time throws away every sighting after it — a worker
-  // resurrected half an hour later reports the ack-time `lastSeenAt`, and the status
-  // bar's "закрыт N назад" is wrong by that whole half hour (§10 tells "closed" from
-  // "stale" by exactly this number).
+  // OTHER than `command`, not only on hello_ack: an MV3 worker dies between events, and
+  // the status bar's "закрыт N назад" (§10) needs a fresh `lastSeenAt`.
   //
   // `command` frames are EXCLUDED because they are the hot path: a 200-tab pass is
   // hundreds of them, and a storage write in front of every dispatch buys nothing —
@@ -463,8 +444,7 @@ export class Connection {
     // Bind to THIS socket by identity, exactly like onclose below: a late frame from a
     // socket we have already preempted (e.g. a quarantine forced-reconnect swapped
     // `this.ws`) must not be processed against the CURRENT connection's in-memory state
-    // (`_lastHelloWasPending`), or a stale hello_ack could drive a wrong promotion. The
-    // no-wrong-promotion invariant must hold STRUCTURALLY, not just incidentally.
+    // (`_lastHelloWasPending`), or a stale hello_ack could drive a wrong promotion.
     ws.onmessage = (event) => {
       if (this.ws !== ws) return;
       this._onMessage(event.data).catch((e) =>
@@ -575,13 +555,8 @@ export class Connection {
 
   // enroll_request (§6) for the secret under `secretKey`: {type, protocolVersion,
   // installUuid, code, secret, instanceId}. Option A: the RAW secret hex goes on the wire
-  // (over TLS) and the SERVER hashes it into the stored secret_hash.
-  //
-  // The name field is `instanceId` — ONE name for one thing. It used to be `title`, a
-  // display name the operator then had to pair with an id typed in the console; there was
-  // no rename anywhere in the product to pay for that split, so the two collapsed into the
-  // id (§6). The frame no longer carries `origin` either: its only reader was the pending
-  // row an operator inspected before approving, and both are gone.
+  // (over TLS) and the SERVER hashes it into the stored secret_hash. `instanceId` is the
+  // browser's name and becomes its id (§6).
   async _sendEnrollRequest(secretKey, code) {
     const secret = await this._readSecretHex(secretKey);
     this._send({
@@ -594,14 +569,12 @@ export class Connection {
     });
   }
 
-  // hello (§2/§7) authenticated by the secret under `secretKey`. The shared `token` is
-  // GONE and the client no longer self-reports a trusted `instanceId` — the server
-  // hashes the RAW secret and resolves the id from it (slice B / option A).
+  // hello (§2/§7) authenticated by the secret under `secretKey`. The client does not
+  // self-report its id: the server hashes the RAW secret and resolves the id from it.
   // `_lastHelloWasPending` records WHICH secret this hello carried so _onApproved knows
   // whether a subsequent ok:true means "the re-enrolled secret was accepted" (promote) or
   // "the old secret recovered" (discard the moot re-enroll). A hello with no secret is a
-  // no-op (nothing to say). The frame no longer carries a `title`: the id IS the name and
-  // the service assigned it at enrolment — a hello cannot change it (§6).
+  // no-op (nothing to say). The id is assigned at enrolment; a hello cannot change it (§6).
   async _sendHello(secretKey = INSTANCE_SECRET_KEY) {
     const secret = await this._readSecretHex(secretKey);
     if (!secret) return; // needs-enroll: no secret to authenticate with
@@ -726,7 +699,7 @@ export class Connection {
 
   // Quarantine (unknown_instance after approval, §7). We do NOT wipe the secret.
   //
-  // RATIONALE (documented, mine): `unknown` is exactly what the server answers after a
+  // `unknown` is exactly what the server answers after a
   // restore from an OLD backup or a transient DB error — and it hits the WHOLE fleet at
   // once. The enrollment window code lives only ~10 min, so wiping the secret on
   // `unknown` and auto-enrolling would turn one bad restore into a fleet-wide
@@ -800,8 +773,7 @@ export class Connection {
       case "enroll_accepted":
         // ENROLLED, right now — the window with a valid code was the whole permission
         // (§6), so this frame carries the assigned id and there is nothing further to
-        // wait for. It replaced `enroll_pending`, which only ever meant "an operator has
-        // yet to look at this".
+        // wait for.
         //
         // `promotePending: true` is passed explicitly rather than reusing
         // `_lastHelloWasPending`: this frame answers an enroll_request, not a hello, and

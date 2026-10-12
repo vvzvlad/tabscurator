@@ -31,7 +31,7 @@ from src.api.metrics import Snapshot, _pass_overdue_seconds
 from src.app import create_app
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -188,7 +188,7 @@ def test_delete_pause_starts_and_runs_pass(tmp_path):
         # Stop fully cleared: the flag row is blank and the gate no longer fires.
         assert _setting(db_path, "curator_stopped_at") == ""
         assert client.get("/api/state", headers=AUTH).json()["stopped_at"] is None
-        # A previously-gated verb now passes the gate (422: missing focus target ≠ 423).
+        # A gated verb passes the gate (422: missing focus target ≠ 423).
         assert client.post(
             "/api/focus", headers=AUTH, json={"instance": "main", "tabId": 1}
         ).status_code in (200, 502, 422)
@@ -288,8 +288,8 @@ def test_start_after_a_stop_latches_an_over_threshold_plan_then_confirms(tmp_pat
 
     The SECOND click — a DELETE with no stop set — is the informed confirm: by then
     the plan is on screen next to the button, so it executes and clears the latch.
-    Reddens if ``resume_now`` goes back to passing ``confirm_pending``
-    unconditionally (the first DELETE would execute both relocations)."""
+    Fails if ``resume_now`` passes ``confirm_pending`` unconditionally (the first
+    DELETE would execute both relocations)."""
     from concurrent.futures import ThreadPoolExecutor
 
     app = create_app(_settings(tmp_path, max_actions_per_pass=1,
@@ -370,8 +370,8 @@ def _seed_instance_and_action(db_path):
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("PRAGMA busy_timeout = 5000")
-        # Active row WITH a secret_hash so 'main' can authenticate as an INSTANCE caller
-        # (issue #35 §4) — the force-verb tests below cross the stop only for that kind.
+        # Active row WITH a secret_hash so 'main' can authenticate as an INSTANCE caller;
+        # the force-verb tests below cross the stop only for that kind.
         conn.execute(
             "INSERT INTO instances (id, status, secret_hash, connected, session_id, "
             "snapshot_at) VALUES ('main', 'active', ?, 0, 's', 0)",
@@ -407,8 +407,7 @@ def test_force_crosses_the_stop_gate_only_for_the_human_verbs(tmp_path):
         instance_auth = instance_headers(secret_for("main"))
 
         # Human buttons WITH force: past the gate. They then fail on their own merits
-        # (no live socket => 409/502/422), which is the point — the STOP no longer
-        # decides, so anything but 423 proves the gate was crossed.
+        # (no live socket => 409/502/422); anything but 423 proves the gate was crossed.
         forced = [
             ("/api/focus", {"instance": "main", "tabId": 1, "force": True}),
             (f"/api/actions/{aid}/restore", {"force": True}),
@@ -456,7 +455,7 @@ def test_forced_restore_is_journaled_as_user_and_marked_in_detail(tmp_path):
     app = create_app(_settings(tmp_path, state_fresh_ms=3_000_000))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
-        approve_instance(db_path, "i1")  # secret-hello needs an approved active row (#35)
+        approve_instance(db_path, "i1")  # secret-hello needs an enrolled active row
         ws = client.websocket_connect("/ext").__enter__()
         try:
             ws.send_json({

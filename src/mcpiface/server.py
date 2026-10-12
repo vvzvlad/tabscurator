@@ -20,10 +20,10 @@ THE mount trap (§11), and exactly how this module avoids each half:
 
 ``mcp.run(transport="streamable-http")`` is unusable — it starts its own uvicorn and
 takes the port; the service needs ``/ext``, ``/api/*``, ``/healthz``, ``/metrics`` on
-the same port. The SDK version is NOT pinned (the 307-redirect concern that once
-motivated a pin is false: the client hardcodes ``follow_redirects=True``).
+the same port. The SDK version is NOT pinned (the client hardcodes
+``follow_redirects=True``, so the Mount 307 is harmless).
 
-Auth: ``/mcp`` sits behind the ``ADMIN_TOKEN`` Bearer (issue #35 §4: the agent equals
+Auth: ``/mcp`` sits behind the ``ADMIN_TOKEN`` Bearer (§4: the agent equals
 the human — both authenticate with ADMIN_TOKEN, which opens ``/mcp`` and ``/admin/*``).
 The check runs in the ASGI wrapper before the request reaches the session
 manager. DNS-rebinding Host/Origin validation is DISABLED: the endpoint is
@@ -167,19 +167,19 @@ def build_mcp(app_ref) -> MCPServer:
         return await _guarded(tools.reset_singleton(_host(), rule_id=rule_id))
 
     # --- commands (initiator='mcp' + auth_ctx = MCP session) -----------------
-    # #47 "session epoch": every mutating verb that targets an instance accepts an
+    # "Session epoch": every mutating verb that targets an instance accepts an
     # optional ``expected_session`` — the ``session_id`` the agent just read off
     # list_instances/list_tabs. It is STAMPED into the command frame so the extension
     # refuses (``stale_session``) if the browser has restarted since; omit it to run
-    # unprotected, exactly as before (fail-open by design).
+    # unprotected (fail-open by design).
     @mcp.tool()
     async def open_tab(instance: str, url: str, pinned: bool = False, active: bool = False,
                        window_id: int | None = None, lease_ttl_s: int | None = None,
                        expected_session: str | None = None) -> dict:
         """Open a tab in an instance (§6).
 
-        ``window_id`` optionally names the destination window (#45): omit it and the
-        extension auto-selects the §9 window (today's behaviour); give it and the tab is
+        ``window_id`` optionally names the destination window: omit it and the
+        extension auto-selects the §9 window; give it and the tab is
         opened in THAT window, refused with ``no_window`` if it is not a normal,
         non-fullscreen window or has vanished. A server-side cross-check turns an OLD
         extension that ignores the key (dropping the tab in its own window) into the same
@@ -218,8 +218,8 @@ def build_mcp(app_ref) -> MCPServer:
                            expected_session: str | None = None) -> dict:
         """Point a tab at an http/https url (§6), optionally waiting for the page.
 
-        ``wait_until`` defaults to ``'none'`` (return as soon as the navigation is issued —
-        today's behaviour, answering the unchanged ``{ok, result}``). ``'load'`` waits for
+        ``wait_until`` defaults to ``'none'`` (return as soon as the navigation is issued,
+        answering ``{ok, result}``). ``'load'`` waits for
         the tab to report ``complete``; ``'selector'`` waits for ``selector`` to match.
         BOTH wait for the navigation to COMMIT first, so neither ordinarily reports about
         the page the tab is leaving. THREE CASES ESCAPE THAT and can answer about the OLD
@@ -273,7 +273,7 @@ def build_mcp(app_ref) -> MCPServer:
     @mcp.tool()
     async def wake_tab(instance: str, tab_id: int,
                        expected_session: str | None = None) -> dict:
-        """Wake a DISCARDED tab and wait for it to load (§6, issue #68).
+        """Wake a DISCARDED tab and wait for it to load (§6).
 
         The browser unloads idle tabs from memory to save RAM. Such a tab still shows up in
         ``list_tabs`` with its url, but injecting/attaching verbs (``get_text``, ``execute_js``,
@@ -299,7 +299,7 @@ def build_mcp(app_ref) -> MCPServer:
     async def close_tab(instance: str, tab_id: int | None = None,
                         tab_ids: list[int] | None = None,
                         expected_session: str | None = None) -> dict:
-        """Close ONE tab (``tab_id``) or a LIST (``tab_ids``) in an instance (§6/#49).
+        """Close ONE tab (``tab_id``) or a LIST (``tab_ids``) in an instance (§6).
 
         EXACTLY ONE of ``tab_id`` / ``tab_ids`` is required (both/neither, an empty
         ``tab_ids``, or duplicate ids => ``invalid_args``, nothing sent). The single form
@@ -328,15 +328,15 @@ def build_mcp(app_ref) -> MCPServer:
         expected_session: str | None = None,
     ) -> dict:
         """Move ONE tab (``tab_id``) or a LIST (``tab_ids``) to ``window_id``/position
-        inside one browser; omit index for the end (§6/§9/#49).
+        inside one browser; omit index for the end (§6/§9).
 
         EXACTLY ONE of ``tab_id`` / ``tab_ids`` is required (both/neither, empty, or
         duplicate ids => ``invalid_args``). The single form returns ``{result}`` unchanged;
         the list returns ``{results:[{index, ok, tabId?, windowId?, error?}]}`` — a pinned
         cross-window tab gets ``pinned_cross_window`` and stays, others move.
 
-        Pass ``window_id=null`` to EXTRACT a SINGLE tab into a brand-new background window
-        (#45); the response ``windowId`` is the created window's id. ``tab_ids`` WITH
+        Pass ``window_id=null`` to EXTRACT a SINGLE tab into a brand-new background window;
+        the response ``windowId`` is the created window's id. ``tab_ids`` WITH
         ``window_id=null`` is ``invalid_args`` — ``windows.create`` takes one tabId, so
         "one new window for all" is a different, unrequested op. Refuses with ``no_window``
         when a NAMED target is not a normal, non-fullscreen window. ``timeout``/
@@ -696,7 +696,7 @@ def build_mcp(app_ref) -> MCPServer:
             auth_ctx=current_mcp_session(), expected_session=expected_session,
         ))
 
-    # --- WebSocket-frame capture (§12, wave 21) ------------------------------
+    # --- WebSocket-frame capture (§12) --------------------------------------
     @mcp.tool()
     async def start_ws_capture(instance: str, tab_id: int,
                                expected_session: str | None = None) -> dict:
@@ -790,13 +790,13 @@ def build_mcp(app_ref) -> MCPServer:
                            tab_id: int | None = None, tab_ids: list[int] | None = None,
                            expected_session_from: str | None = None) -> dict:
         """Relocate ONE tab (``tab_id``) or a LIST (``tab_ids``) from ``instance_from`` to
-        ``instance_to``, completed synchronously (#48/#49): open the copy in the target and
+        ``instance_to``, completed synchronously: open the copy in the target and
         close the source under §7's step-4 guards. Returns ``status:"done"`` on success, or
         ``status:"half"`` (with a ``reason``) when the source close cannot be completed —
-        today's phase-A-only outcome, which the pass's phase B finishes later.
+        the phase-A-only outcome, which the pass's phase B finishes later.
 
         EXACTLY ONE of ``tab_id`` / ``tab_ids`` is required (both/neither, empty, or
-        duplicate ids => ``invalid_args``). The single form returns the #48 shape; the list
+        duplicate ids => ``invalid_args``). The single form returns the shape above; the list
         returns ``{results:[{index, ok, status?, reason?, tab_id_to?, error?}]}`` and ONE
         shared ``undo_pass_id`` (``mcp-<uuid>``) that reverses the WHOLE batch as a unit
         (undo counts its units and requires ``confirm_impact`` like a pass). Duplicate
@@ -804,7 +804,7 @@ def build_mcp(app_ref) -> MCPServer:
         a dropped item gets ``error:"duplicate"`` (else N sources of one url would make N
         permanent copies). ``undo_pass_id`` (``mcp-<uuid>``) reverses the relocation.
 
-        ``expected_session_from`` pins the SOURCE epoch (#47): a restarted source browser
+        ``expected_session_from`` pins the SOURCE epoch: a restarted source browser
         refuses the relocation before any copy is opened, and the same epoch is stamped on
         the synchronous source close. The target open/get_tab are never session-pinned — a
         copy in a restarted target is correct, not dangerous. ``timeout``/``no_connection``
@@ -860,7 +860,7 @@ class _MCPAsgi:
         settings = scope["app"].state.settings
         auth = headers.get(b"authorization", b"").decode("latin-1")
         scheme, _, token = auth.partition(" ")
-        # Constant-time compare, as bytes, against ADMIN_TOKEN (issue #35 §4: the MCP
+        # Constant-time compare, as bytes, against ADMIN_TOKEN (§4: the MCP
         # agent authenticates as the human/admin, not with a per-instance secret).
         if scheme.lower() != "bearer" or not secrets.compare_digest(
             token.encode("utf-8", "ignore"), settings.admin_token.encode("utf-8")

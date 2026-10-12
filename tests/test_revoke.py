@@ -1,7 +1,7 @@
-"""Revocation machinery (issue #35 §5/§6, Task D).
+"""Revocation machinery (§5/§6).
 
-Unit-level coverage for the pieces the /admin handler (Task E) and the curator PASS
-build on: the ``revoke_instance`` transaction (fields cleared + the MAIN 409 guard),
+Unit-level coverage for the pieces the /admin handler and the curator PASS build on:
+the ``revoke_instance`` transaction (fields cleared + the MAIN 409 guard),
 ``read_revoked_relocations`` (what the pass retires), the ``known_instance_ids`` /
 ``load_preview_input`` ``status='active'`` filters, and the ``send_command`` safety net.
 The end-to-end retire-pass + drain-cascade acceptance (8) lives in
@@ -82,7 +82,7 @@ async def test_revoke_instance_clears_session_stamps_status_and_revoked_at(tmp_p
             db, "SELECT status, session_id, revoked_at FROM instances WHERE id='gone'"
         )
         assert row == [("revoked", None, 5000)]
-        # A revoke of an id with no row reports revoked=False (Task E → 404), no crash.
+        # A revoke of an id with no row reports revoked=False (the handler maps it to 404), no crash.
         res2 = await db.write(
             lambda c: revoke_instance(c, "ghost", now=6000, main_instance_id="main")
         )
@@ -97,10 +97,10 @@ async def test_revoke_clears_a_stuck_connected_flag_with_no_live_socket(tmp_path
     The revoke handler's socket close is best-effort AND registry-driven: with no entry it
     returns immediately (``admin._close_live_socket``). ``mark_disconnected`` only ever runs
     from a socket's own finalizer and is epoch-guarded, so there is no other writer either.
-    A row left ``connected=1`` by a process kill — the state a crash leaves behind — used
-    to stay that way forever after a revoke, and a "connected" instance whose snapshot
-    never advances is precisely what ``curator-instance-snapshot-stale`` reads as a
-    half-open socket. Reddens if the ``connected = 0`` clause leaves ``_REVOKE_UPDATE``.
+    A row left ``connected=1`` by a process kill would otherwise stay that way forever
+    after a revoke, and a "connected" instance whose snapshot never advances is what
+    ``curator-instance-snapshot-stale`` reads as a half-open socket. Fails if the
+    ``connected = 0`` clause leaves ``_REVOKE_UPDATE``.
     """
     db = await _make_db(tmp_path)
     try:
@@ -261,7 +261,7 @@ async def test_load_preview_input_excludes_revoked_tabs_but_keeps_the_drain(tmp_
         await db.close()
 
 
-# --- send_command safety net (§5 / Task D §4) -------------------------------
+# --- send_command safety net (§5) ---------------------------------------------
 async def test_send_command_to_revoked_instance_fails_like_no_connection(tmp_path):
     """A command to a revoked instance (whose live socket lost the close race) fails with
     ERR_NO_CONNECTION and puts NO frame on the wire. The control arm — flipping the row

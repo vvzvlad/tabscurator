@@ -47,7 +47,7 @@ class PassCtx:
     ready: dict               # instance_id -> Readiness captured at step 3 (§7)
     actions_count: int = 0    # incremented on every action row written
     closed: set = field(default_factory=set)  # (instance_id, tab_id) closed THIS pass
-    # What the pass did for the owner (#66). ``actions_count`` also grows on rows for
+    # What the pass did for the owner. ``actions_count`` also grows on rows for
     # work that did NOT happen, so the button cannot report it as "done N":
     # ``performed`` counts the actions that really happened (a ``done`` row);
     # ``not_performed`` counts per reason every planned action that did not happen —
@@ -63,7 +63,7 @@ class PassCtx:
 
 
 def note_not_performed(ctx: PassCtx, reason: str, count: int = 1) -> None:
-    """Count ``count`` planned-but-not-carried-out actions under ``reason`` (#66)."""
+    """Count ``count`` planned-but-not-carried-out actions under ``reason``."""
     ctx.not_performed[reason] = ctx.not_performed.get(reason, 0) + count
 
 
@@ -78,9 +78,9 @@ NOT_PERFORMED_READINESS = "readiness_changed"
 # A phase-B target that did not answer this pass's snapshot at all (decide() checks
 # only the SOURCE's readiness). Same word as the runner's aggregated deferral row.
 NOT_PERFORMED_UNREADY = "target_not_ready"
-# ``open_tab`` answered without an int ``tabId`` (SUGGESTION 6): no rows written.
+# ``open_tab`` answered without an int ``tabId``: no rows written.
 NOT_PERFORMED_BAD_REPLY = "bad_reply"
-# A dedupe / singleton survivor that navigated away before the close (SUGGESTION 4).
+# A dedupe / singleton survivor that navigated away before the close.
 NOT_PERFORMED_SURVIVOR_CHANGED = "survivor_changed"
 # A unit that raised unexpectedly (swallowed by runner._isolated) before counting itself.
 NOT_PERFORMED_UNEXPECTED_ERROR = "unexpected_error"
@@ -236,7 +236,7 @@ async def run_phase_a(ctx: PassCtx, dec) -> None:
         return
     tab_id_to = result.get("tabId")
     window_id_to = result.get("windowId")
-    # SUGGESTION 6 (§7): a malformed ``open_tab`` reply without an int ``tabId`` must
+    # §7: a malformed ``open_tab`` reply without an int ``tabId`` must
     # NOT be written. SQLite's INTEGER affinity would happily store a string/float as
     # ``tabs.tab_id`` / ``relocate.tab_id_to`` — a LIVE relocate row pointing at a
     # non-existent copy. Better no relocate row (the source is untouched this pass and
@@ -330,13 +330,13 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
     # §7 mid-pass eject: the SOURCE reconnected/changed session between readiness and
     # now (e.g. during the get_tab above) => its captured tab_id is stale; a close on it
     # would precondition_failed and wrongly strike a healthy url. Defer (leave the row
-    # live, no strike). This is exactly the WARNING-3 reconnect case.
+    # live, no strike).
     if not _ready_unchanged(ctx, reloc.instance_from):
         logger.info("phase B deferred (source readiness changed) for reloc {}", reloc.id)
         note_not_performed(ctx, NOT_PERFORMED_READINESS)
         return
 
-    # Copy is alive => complete the relocation at-least-once (§7, WARNING-1).
+    # Copy is alive => complete the relocation at-least-once (§7).
     # Record the DISTINCT relocate_close as `pending` UNDER the lease guard BEFORE the
     # browser close, so that a lease lost between a successful `close_tab` and its
     # completion write does not leave the source closed with NO record (a journal hole
@@ -382,8 +382,8 @@ async def run_phase_b(ctx: PassCtx, dec) -> None:
         return
 
     # Source closed => complete: pending → done, drop the source, reset strikes (§7).
-    # If THIS guarded write is fenced (the WARNING-1 window), the pending row SURVIVES
-    # and reconcile completes it next pass — that is the whole point.
+    # If THIS guarded write is fenced, the pending row SURVIVES
+    # and reconcile completes it next pass.
     def _done(conn: sqlite3.Connection) -> None:
         set_action_status(conn, pending_id, "done")
         _delete_tab(conn, reloc.instance_from, source_tab.tab_id)
@@ -417,7 +417,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
             instance_to = survivor.instance_id  # inter-instance dedup: survivor's home
     rule_id, rule_pattern = _rule_cols(dec.rule)
 
-    # SUGGESTION 4 (§7): a dedupe/singleton close removes the SOURCE only because the
+    # §7: a dedupe/singleton close removes the SOURCE only because the
     # frozen mirror showed a survivor. If the human closed that survivor (or navigated
     # it away) between the snapshot and now, closing the source would delete the LAST
     # copy of the url. Mirror phase B's care: verify the survivor is still present with
@@ -454,7 +454,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
         note_not_performed(ctx, NOT_PERFORMED_READINESS)
         return
 
-    # At-least-once close journaling (§7, WARNING-1): record the close row as `pending`
+    # At-least-once close journaling (§7): record the close row as `pending`
     # UNDER the lease guard BEFORE the browser close, with every column the `done` row
     # carries, so a lease lost between a successful `close_tab` and its completion write
     # does not lose the close's record. A fenced pending write => LeaseLost, pass stops,
@@ -495,7 +495,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
         return
 
     # Source closed => complete: pending → done, drop the tab, reset strikes (§7).
-    # A fenced completion (the WARNING-1 window) leaves the pending row for reconcile.
+    # A fenced completion leaves the pending row for reconcile.
     def _done(conn: sqlite3.Connection) -> None:
         set_action_status(conn, pending_id, "done")
         _delete_tab(conn, tab.instance_id, tab.tab_id)
@@ -509,7 +509,7 @@ async def run_close(ctx: PassCtx, dec) -> None:
     ctx.performed += 1
 
 
-# --- reconcile: resolve prior-pass pending closes (§7, WARNING-1) -----------
+# --- reconcile: resolve prior-pass pending closes (§7) ----------------------
 def _source_present(mirror, row) -> bool:
     """Is the source of a PENDING close still present in this pass's frozen mirror?
 
@@ -519,7 +519,7 @@ def _source_present(mirror, row) -> bool:
     and a NEW session, but a source that never actually closed (a connection-class
     failure whose ``pending`` row we left) still carries the same URL — so keying on
     URL, not session, avoids journaling a phantom ``done`` for a close that did not
-    happen (the session short-circuit that once lived here did exactly that).
+    happen.
 
     ABSENT => the close took effect (or the url is gone anyway) → complete → done
     (at-least-once). PRESENT => the close never happened → abandon so ``decide``
@@ -528,19 +528,12 @@ def _source_present(mirror, row) -> bool:
     (the original tab, if it truly closed, is gone — a live match is a different tab
     holding the same url, which the rule wants curated anyway).
 
-    ⚠️ KNOWN LIMITATION, deliberately not fixed. The match is by URL only, so with
-    THREE OR MORE tabs holding the same url in one instance, closing one of them still
-    leaves a match and the (successful) close is journaled ``abandoned`` instead of
-    ``done``. It cannot be tightened with what a pending row carries: ``tab_id`` is
-    discard-volatile even inside one session and ``session_id`` is wiped by a
-    reconnect (§5), which is exactly the case this function exists to survive.
-    Counting instead of matching does not help either — the pre-close count is not
-    recorded, and recording it would still be wrong the moment the human opens or
-    closes a fourth copy mid-pass. The cost of the miss is bounded and self-healing:
-    an ``abandoned`` close is re-issued by ``decide`` (dedup/singleton still sees the
-    duplicates) or, for a relocate, one pass later — never a lost tab, only a journal
-    row that under-reports. The readiness gate in :func:`run_reconcile` removes the
-    far more damaging version of the same failure (a whole instance's stale mirror).
+    ⚠️ Known limitation: with THREE OR MORE tabs holding the same url in one instance,
+    closing one still leaves a match and the successful close is journaled
+    ``abandoned``. A pending row carries nothing stabler than the url (``tab_id`` is
+    discard-volatile, ``session_id`` is wiped by a reconnect, §5). The cost is a journal
+    row that under-reports: the ``abandoned`` close is re-issued by ``decide`` or, for a
+    relocate, one pass later — never a lost tab.
     """
     return any(t.url == row["url"] for t in mirror.tabs_of(row["instance_from"]))
 
@@ -552,21 +545,13 @@ async def run_reconcile(ctx: PassCtx, row) -> None:
     Idempotent and safe to run every pass: a pending row is resolved to exactly one
     terminal state and never revisited.
 
-    **Gated on the source instance's readiness for THIS pass.** The verdict is read off
-    a mirror, and a mirror is only as fresh as the snapshot that filled it. An instance
-    that did not answer this pass's ``snapshot_request`` within ``SNAPSHOT_TIMEOUT_MS``
-    (the laptop is asleep, the service worker has not woken) leaves the mirror showing
-    the world as it was BEFORE the close — ``_source_present`` then says "still there"
-    and a close that really happened is terminally journaled ``abandoned``. For a
-    ``relocate_close`` that is permanent: ``abandoned`` does not retire the relocation,
-    so a completed relocation looks abandoned forever. §7 fixes instance readiness for
-    the whole pass by ``(instance_id, conn_epoch, session_id, snapshot_id)`` and takes an
-    instance out of the pass ENTIRELY when it changes — that applies here too, so an
-    unready source leaves the row ``pending`` for a pass with a fresh snapshot. That is
-    precisely the at-least-once semantics ``pending`` was introduced for. (An instance
-    retired for good therefore leaves its pending rows pending: an unresolved journal
-    row that ``ACTIONS_RETENTION_DAYS`` eventually collects is a far cheaper wrong than
-    a terminal verdict invented from a mirror nobody refreshed.)
+    **Gated on the source instance's readiness for THIS pass.** An instance that did not
+    answer this pass's ``snapshot_request`` within ``SNAPSHOT_TIMEOUT_MS`` leaves a stale
+    mirror showing the world BEFORE the close, and ``_source_present`` would terminally
+    journal a real close ``abandoned`` (permanently, for a ``relocate_close``). An
+    unready source leaves the row ``pending`` for a pass with a fresh snapshot; an
+    instance retired for good leaves its rows pending until ``ACTIONS_RETENTION_DAYS``
+    collects them.
 
     * Source ABSENT (the close happened, just wasn't journaled) → ``pending`` → ``done``
       and reset the pair's strikes; the source tab is already gone from the mirror, so
@@ -656,12 +641,9 @@ async def run_window_merge(ctx: PassCtx, merge) -> None:
     # §9 wants the list of tabs that were actually MOVED. The plan came from the mirror
     # frozen BEFORE steps 4-8, so tab_ids this very pass closed would describe a move
     # that never happened; drop them. The extension answers ``merge_windows`` with a
-    # ``{merged: N}`` COUNT and no ids, so the server's own bookkeeping is all there is:
-    # if the command ever starts returning the moved ids, take them verbatim instead of
-    # reconstructing — they are the only authoritative answer.
+    # ``{merged: N}`` COUNT and no ids, so the server's own bookkeeping is all there is.
     #
-    # What this list still cannot know, and deliberately does not pretend to:
-    # a close that failed connection-class (its outcome is UNKNOWN, so the tab is not in
+    # What this list cannot know: a close that failed connection-class (its outcome is UNKNOWN, so the tab is not in
     # ``ctx.closed`` and stays listed), and tabs the human opened in a source window
     # after the snapshot (moved by the extension, absent from the plan). ``merged`` is
     # recorded beside the list precisely so the two can be compared when they disagree.

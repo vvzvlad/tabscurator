@@ -131,9 +131,8 @@ def test_no_safety_copy_when_nothing_to_migrate(tmp_path):
 
 def test_safety_copy_taken_when_a_step_is_pending(tmp_path):
     # An existing schema with a pending step MUST get a pre-migration safety copy.
-    # De-hardcoded off MAX_VERSION: the synthetic pending step targets MAX_VERSION+1 so
-    # this test keeps meaning as real steps are appended (it used to hardcode `2`, which
-    # now collides with the shipped enrollment step).
+    # The synthetic pending step targets MAX_VERSION+1 so this test keeps meaning as real
+    # steps are appended.
     db = str(tmp_path / "curator.db")
     backups = str(tmp_path / "backups")
     next_version = MAX_VERSION + 1
@@ -178,11 +177,8 @@ def test_migrate_creates_enrollment_schema(tmp_path):
     try:
         result = migrate(conn, db, backups)
         assert result.ok and not result.degraded
-        # PRAGMA user_version tracks MAX_VERSION. NOT compared against a literal: the
-        # enrollment step's version is an implementation detail that moves the moment a
-        # step is appended, and a hardcoded number here would redden a change that is
-        # correct — the very hardcoding issue #35 asked to remove (it survived one round in
-        # this same assertion). What this test is ABOUT is the objects below.
+        # PRAGMA user_version tracks MAX_VERSION, not a literal: step versions move when a
+        # step is appended. What this test is ABOUT is the objects below.
         assert _version(conn) == MAX_VERSION
 
         tables = _tables(conn)
