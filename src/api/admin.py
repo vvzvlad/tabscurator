@@ -59,9 +59,9 @@ async def require_admin(request: Request) -> Caller:
       401, an instance secret → an instance :class:`Caller` we reject with 401, a DB outage
       → 503) and narrowed to ``kind=='admin'``. A Bearer request carries NO ambient cookie,
       so browsers cannot auto-send it cross-site — it therefore SKIPS the CSRF gate (acc 7).
-    * **(b) a valid session cookie** — the HTML console. Validated against the in-memory
-      store (:mod:`src.api.admin_session`): server-side expiry + revoke + fingerprint match
-      (a rotated ADMIN_TOKEN kills it, acc 4). Because the cookie is AMBIENT, a cookie-
+    * **(b) a valid session cookie** — the HTML console: an HMAC-signed expiry
+      (:mod:`src.api.admin_session`) verified server-side; a rotated ADMIN_TOKEN changes
+      the signing key and kills it (acc 4). Because the cookie is AMBIENT, a cookie-
       authenticated MUTATING verb (POST/PUT/DELETE) must additionally clear the same-origin
       CSRF gate (:func:`require_same_origin`, acc 3); reads (GET) skip it.
 

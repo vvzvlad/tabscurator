@@ -2310,6 +2310,8 @@ async function executeJs(params) {
 // ⚠️ MV3 LIFETIME: the service worker can die and be resurrected, losing this in-memory set
 // (chrome.debugger drops the dead worker's attachments too). The emulation then lapses and
 // a fresh enable re-attaches cleanly.
+// TODO: move the set into chrome.storage.session so a resurrected worker can reconcile its
+// attachments.
 const debuggerAttachedTabs = new Set();
 
 // WebSocket-frame capture buffers (§12): tabId -> { url|null, frames: [], dropped,

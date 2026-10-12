@@ -41,7 +41,9 @@ jobs:
         ADMIN_TOKEN: test-admin-token       # required + must differ from METRICS_TOKEN (§13)
       run: pytest --tb=short -q
 
-    # The alert rules (§12) are validated in the test job. promtool is not a Python
+    # The alert rules (§12) are validated in the test job, not a job of their own, so
+    # `build: needs: test` in image-check-publish.yml gates the image on them: a rules file
+    # that does not parse would ship a curator with no alerts. promtool is not a Python
     # dep, so it is fetched here, pinned to the Prometheus LTS line.
     - name: Install promtool
       env:

@@ -23,9 +23,9 @@ around it. Two commands, in order:
   ``--load-extension`` pointing at the SHARED bundle.
 
 The service address and the per-install secret are not in the build: each profile
-receives them through the extension's enrollment settings UI, and the operator
-approves the request on ``/admin`` (§13). A code update is a rebuild of the one
-shared bundle.
+receives them through the extension's enrollment settings UI and enrols itself
+with the window code the operator opens on ``/admin`` (§6/§13). A code update is a
+rebuild of the one shared bundle.
 
 The module is split into a PURE core (`core`, all filesystem/text logic, runs on
 Linux/CI) and a thin macOS platform layer (`macos`, the real ``.icns``/``.app``

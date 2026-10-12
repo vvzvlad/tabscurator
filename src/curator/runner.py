@@ -377,8 +377,8 @@ async def run_pass(
         # a pending relocate_close is already excluded from live_relocations, so a
         # relocation is never both reconciled AND phase-B'd in the same pass.
         # A row whose source instance did NOT answer THIS pass's snapshot is left
-        # alone by ``run_reconcile`` — see its readiness gate. A row younger than one
-        # ``cmd_timeout_ms`` is skipped by ``read_pending_closes`` itself: the
+        # alone by ``run_reconcile`` — see its readiness gate. A row younger than
+        # ``3*cmd_timeout_ms`` is skipped by ``read_pending_closes`` itself: the
         # synchronous relocate_tab verb writes its pending close BEFORE sending the
         # source close, so its row must not be reconciled while that verb is still
         # awaiting the response.

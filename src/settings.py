@@ -90,11 +90,10 @@ class Settings(BaseSettings):
     # window (arm_enroll_window silently floors it to 1) and a value above the clamp would
     # be silently reduced — both are config that does not mean what it says.
     enroll_window_min: int = Field(default=10, ge=1, le=ENROLL_WINDOW_MAX_MIN)
-    # Lifetime of an /admin HTML-console browser SESSION (§13). The login cookie
-    # carries a random id (never the ADMIN_TOKEN); this is how long that id stays valid in
-    # the in-memory session store before a re-login is required. Enforced SERVER-side (the
-    # cookie Max-Age is only a browser hint), and a rotated ADMIN_TOKEN invalidates every
-    # session immediately regardless of this.
+    # Lifetime of an /admin HTML-console browser SESSION (§13). The login cookie is a
+    # signed expiry (never the ADMIN_TOKEN); this is the lifetime written into it, checked
+    # SERVER-side (the cookie Max-Age is only a browser hint), and a rotated ADMIN_TOKEN
+    # invalidates every session immediately regardless of this.
     # 365 days. The cookie is signed and stateless, so it survives restarts. NOT infinite
     # on purpose: a stateless cookie has no server-side revoke, so its lifetime is the
     # only thing that eventually retires a copy someone walked off with. Rotating
