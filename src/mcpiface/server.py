@@ -60,6 +60,41 @@ def current_mcp_session() -> str | None:
     return _mcp_session.get()
 
 
+# The text the server hands every client at initialize. It carries the habits agents
+# kept having to re-learn per session; every tool and parameter it names must exist
+# (pinned by tests/test_mcp_mount.py).
+INSTRUCTIONS = (
+    "curator drives the user's OWN browsers: several Brave instances, each a separate "
+    "profile with its real cookies and logins, reached through an extension. Use it "
+    "instead of chrome-devtools for any site behind a captcha, a login or an anti-bot "
+    "wall — chrome-devtools is an isolated browser with no session and meets the wall.\n\n"
+    "Never call list_tabs bare: the unfiltered list of every tab in every instance "
+    "overflows the context. It has no field projection, only filters — pass "
+    "`url_contains` (case-insensitive url substring; default to the site's host, e.g. "
+    "`url_contains=\"avito.ru\"`) and `instance` when you know it. For an overview of the "
+    "fleet use list_windows (per-window tab counts) or list_instances.\n\n"
+    "A background tab is not a live page. A DISCARDED one answers `tab_discarded` to "
+    "get_text, execute_js and the other injecting verbs: call wake_tab, then retry — it "
+    "ALWAYS reloads, so never call it on a live tab whose page state you need. A HIDDEN one "
+    "throttles timers and reports `visibilityState: hidden`, so lazy feeds, virtualized "
+    "lists and widgets that wait for focus do not render or react: call "
+    "`set_focus_emulation(enabled=true)` before reading or driving it (the screen stays with "
+    "the user; needs the JS & Debugger checkbox) and `enabled=false` when done — while it is "
+    "on, the browser shows the \"is being debugged\" bar and the debugger is detectable by "
+    "anti-bot scripts. Code that outlives one call goes through start_js + poll_job, not a "
+    "long execute_js.\n\n"
+    "The first HTTP 403 or 429, captcha or \"access restricted\" page means STOP and tell "
+    "the user. No retries, no switching to another instance, tab or address to get around "
+    "it.\n\n"
+    "Hundreds of calls against one site on the user's account only after the user said yes "
+    "to your estimate of the volume. A paid generator: one sample first, show it, then ask.\n\n"
+    "Avito (messenger, orders, listings search): the reference is docs/avito.md in the "
+    "tabscurator repo, "
+    "https://gitea.vvzvlad.xyz/projects/tabscurator/src/branch/develop/docs/avito.md — a "
+    "worked example of driving a logged-in site."
+)
+
+
 # --- the MCP server + its tools ---------------------------------------------
 def build_mcp(app_ref) -> MCPServer:
     """Build the MCPServer and register every §11 tool.
@@ -69,7 +104,7 @@ def build_mcp(app_ref) -> MCPServer:
     the lifespan has populated ``db`` / ``ext_registry`` / ``settings``). The handler
     bodies live in :mod:`src.mcpiface.tools` and are unit-tested directly.
     """
-    mcp = MCPServer("tabscurator")
+    mcp = MCPServer("tabscurator", instructions=INSTRUCTIONS)
 
     def _host():
         return app_ref.app
