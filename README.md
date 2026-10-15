@@ -173,4 +173,5 @@ enrollment'ом:
 
 Полный дизайн, протокол и схема БД — [`docs/architecture.md`](docs/architecture.md).
 Рунбук эксплуатации — [`deploy/DEPLOY.md`](deploy/DEPLOY.md), генератор инстансов —
-[`tools/README.md`](tools/README.md).
+[`tools/README.md`](tools/README.md). Разобранный пример, как агент через MCP работает с
+залогиненным сайтом, — [`docs/avito.md`](docs/avito.md).

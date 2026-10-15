@@ -135,3 +135,28 @@ def test_mcp_tools_list_exposes_every_phase11_tool(tmp_path):
         data = _sse_json(r.text)
         names = {t["name"] for t in data["result"]["tools"]}
         assert expected <= names
+
+
+def test_mcp_initialize_hands_out_instructions_naming_real_tools(tmp_path):
+    """The server instructions reach the client at initialize, and every tool and list_tabs
+    filter they name exists — a renamed verb or parameter must redden here instead of
+    sending agents after a tool that is gone."""
+    referenced_tools = {
+        "list_tabs", "list_windows", "list_instances", "get_text", "execute_js",
+        "wake_tab", "set_focus_emulation", "start_js", "poll_job",
+    }
+    app = create_app(_settings(tmp_path))
+    with TestClient(app) as client:
+        r = client.post("/mcp", json=_init_body(), headers=_headers())
+        text = _sse_json(r.text)["result"]["instructions"]
+        h = _headers()
+        h["mcp-session-id"] = r.headers["mcp-session-id"]
+        client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=h)
+        r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, headers=h)
+        tools = {t["name"]: t for t in _sse_json(r.text)["result"]["tools"]}
+    for name in referenced_tools:
+        assert name in text and name in tools, name
+    list_tabs_params = tools["list_tabs"]["inputSchema"]["properties"]
+    for param in ("url_contains", "instance"):
+        assert f"`{param}" in text and param in list_tabs_params, param
+    assert "docs/avito.md" in text
