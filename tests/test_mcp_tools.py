@@ -2803,6 +2803,62 @@ async def test_click_is_refused_while_paused_and_sends_nothing(tmp_path):
     assert ws.sent == []
 
 
+# --- download_file: FIXED-function (url is DATA, not audited) like navigate_tab --------------
+async def test_download_file_sends_url_and_timeout_and_maps_the_complete_frame(tmp_path):
+    """`url` rides as DATA and `timeoutMs` as the omitted-timeout ceiling; the `complete` frame
+    maps to `{ok, path, bytes, mime, state, final_url}` (finalUrl -> final_url). No js_audit row —
+    the same §12 line as navigate_tab/click, because nothing arbitrary ran."""
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    out, frame = await _run_with_response(
+        lambda: tools.download_file(_app(db, reg), instance="main",
+                                    url="https://host/report.pdf"),
+        cs, ws,
+        {"path": "/home/app/Downloads/report.pdf", "bytes": 2048,
+         "mime": "application/pdf", "finalUrl": "https://host/report.pdf",
+         "state": "complete"},
+    )
+    assert out == {"ok": True, "path": "/home/app/Downloads/report.pdf", "bytes": 2048,
+                   "mime": "application/pdf", "state": "complete",
+                   "final_url": "https://host/report.pdf"}
+    assert frame["command"] == protocol.CMD_DOWNLOAD_FILE
+    # Omitted timeout => the ceiling (EXECUTE_JS_MAX_TIMEOUT_MS), as wait_for / navigate_tab do.
+    assert frame["params"] == {"url": "https://host/report.pdf", "timeoutMs": 30000}
+    assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM js_audit").fetchone()) == (0,)
+
+
+async def test_download_file_includes_filename_only_when_passed(tmp_path):
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    cs, ws = _put_conn(reg, "main")
+    _out, frame = await _run_with_response(
+        lambda: tools.download_file(_app(db, reg), instance="main",
+                                    url="https://host/a.bin", filename="sub/a.bin",
+                                    timeout_ms=5000),
+        cs, ws,
+        {"path": "/d/a.bin", "bytes": 1, "mime": "x", "finalUrl": "https://host/a.bin",
+         "state": "complete"},
+    )
+    assert frame["params"] == {"url": "https://host/a.bin", "timeoutMs": 5000,
+                               "filename": "sub/a.bin"}
+
+
+async def test_download_file_is_refused_while_paused_and_sends_nothing(tmp_path):
+    # Pause-gated like every verb reaching the browser; the refusal lands BEFORE the socket, and
+    # the fixed-function verb writes no js_audit row either way.
+    db = await _make_db(tmp_path)
+    reg = Registry()
+    _cs, ws = _put_conn(reg, "main")
+    app = _app(db, reg)
+    await tools.pause(app)
+    with pytest.raises(tools.ToolError) as ei:
+        await tools.download_file(app, instance="main", url="https://host/a.bin")
+    assert ei.value.code == "stopped"
+    assert ws.sent == []
+    assert await db.read(lambda c: c.execute("SELECT COUNT(*) FROM js_audit").fetchone()) == (0,)
+
+
 # --- wait_for ----------------------------------------------------------------
 async def test_wait_for_requires_exactly_one_predicate_and_sends_nothing(tmp_path):
     db = await _make_db(tmp_path)

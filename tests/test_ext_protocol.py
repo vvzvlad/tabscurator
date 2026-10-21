@@ -230,6 +230,9 @@ def test_command_verbs_mirror_the_extension_exactly():
         "execute_js_debugger",
         # click: fixed-function click twin of set_input — selector is DATA, pause-gated, no audit.
         "click",
+        # download_file: fetch a url through the browser (chrome.downloads) in the instance's
+        # session — url is DATA, pause-gated, no checkbox/audit (like navigate_tab).
+        "download_file",
     }
 
 

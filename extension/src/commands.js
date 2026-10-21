@@ -30,6 +30,7 @@ import {
   CMD_FOCUS_TAB,
   CMD_FOCUS_WINDOW,
   CMD_NAVIGATE_TAB,
+  CMD_DOWNLOAD_FILE,
   CMD_MERGE_WINDOWS,
   CMD_EXECUTE_JS,
   CMD_EXECUTE_JS_DEBUGGER,
@@ -671,6 +672,11 @@ export async function dispatchCommand(frame, ctx = {}) {
         return await focusWindow(params);
       case CMD_NAVIGATE_TAB:
         return await navigateTab(params, nowFn, sleep);
+      // Download a url through the browser (chrome.downloads) in this instance's session. A FIXED
+      // action (like navigate_tab) — `url` is DATA, no execute_js checkbox, no js_audit row. The
+      // deadline rides the injectable `sleep` so a test can drive the overrun without real time.
+      case CMD_DOWNLOAD_FILE:
+        return await downloadFile(params, nowFn, sleep);
       case CMD_MERGE_WINDOWS:
         return await mergeWindows(params, nowFn, map);
       case CMD_MOVE_TAB:
@@ -1136,6 +1142,83 @@ async function navigateTab(params, nowFn, sleep) {
   // navigation WAS issued, and "the condition never became true" is a definite answer, not
   // the "no frame arrived / state unknown" that `timeout` reserves for the service.
   return ok({ ok: true, matched: !!outcome.matched, elapsedMs: nowFn() - started });
+}
+
+// download_file {url, filename?, timeoutMs} -> {path, bytes, mime, finalUrl, state}.
+//
+// Download a url THROUGH THE BROWSER using chrome.downloads, so the fetch rides THIS instance's
+// session cookies (what gets past the 403 / anti-bot a plain curl hits) and the file lands in the
+// browser's own download directory — the only disk the remote service can reach. A FIXED action
+// (like navigate_tab): `url` is DATA, not arbitrary code, so no execute_js checkbox and no
+// js_audit row; the http/https edge guard still applies and nothing is downloaded for a non-http
+// url.
+//
+// The wait is EVENT-DRIVEN: start the download, then resolve on the first `onChanged` that reaches
+// `state.current === 'complete'`/`'interrupted'` for THIS id, racing a deadline of `timeoutMs`. A
+// deadline that passes returns a DEFINITE failure (precondition_failed) — the browser may keep
+// downloading, but the verb never hangs and never cancels the transfer. The deadline rides the
+// injectable `sleep` so a test drives the overrun without real time; `nowFn` is accepted for the
+// same call convention as the other waiting verbs. The onChanged listener is always removed.
+async function downloadFile(params, nowFn, sleep) {
+  if (!isHttpUrl(params.url)) {
+    return fail(ERR_PRECONDITION_FAILED, "download_file accepts only http/https urls");
+  }
+  const options = { url: params.url, conflictAction: "uniquify", saveAs: false };
+  if (params.filename !== undefined && params.filename !== null) {
+    options.filename = params.filename;
+  }
+  const downloadId = await chrome.downloads.download(options);
+
+  let onChanged;
+  const terminal = await new Promise((resolve) => {
+    let done = false;
+    const settle = (value) => {
+      if (done) return;
+      done = true;
+      chrome.downloads.onChanged.removeListener(onChanged);
+      resolve(value);
+    };
+    onChanged = (delta) => {
+      if (!delta || delta.id !== downloadId || !delta.state) return;
+      if (delta.state.current === "complete") settle("complete");
+      else if (delta.state.current === "interrupted") settle("interrupted");
+    };
+    chrome.downloads.onChanged.addListener(onChanged);
+    // A download already terminal BEFORE the listener attached (cache hit / tiny file) fires no
+    // onChanged the listener can catch — Chrome does not buffer events. Poll the record once and
+    // settle from it; the `done` flag keeps this and the listener to a single resolution.
+    chrome.downloads.search({ id: downloadId }).then((found) => {
+      const cur = (found || [])[0];
+      if (cur && cur.state === "complete") settle("complete");
+      else if (cur && cur.state === "interrupted") settle("interrupted");
+    });
+    // Deadline — do NOT cancel the download, just stop waiting and answer definitely.
+    sleep(params.timeoutMs).then(() => settle("timeout"));
+  });
+
+  if (terminal === "timeout") {
+    return fail(
+      ERR_PRECONDITION_FAILED,
+      `download did not complete within ${params.timeoutMs}ms (it may still be running in the browser)`,
+    );
+  }
+  const found = await chrome.downloads.search({ id: downloadId });
+  const rec = (found || [])[0] || {};
+  if (terminal === "interrupted") {
+    return fail(ERR_PRECONDITION_FAILED, "download interrupted: " + (rec.error || "unknown"));
+  }
+  if (!rec.filename) {
+    // "complete" with no on-disk path is not a success the agent can use (an empty search, or a
+    // record the browser erased) — answer definitely rather than return ok without a path.
+    return fail(ERR_PRECONDITION_FAILED, "download reported complete but no file path");
+  }
+  return ok({
+    path: rec.filename,
+    bytes: rec.fileSize || rec.totalBytes,
+    mime: rec.mime,
+    finalUrl: rec.finalUrl,
+    state: rec.state,
+  });
 }
 
 // --- get_text / wait_for: FIXED-function observation (§12) -------------------

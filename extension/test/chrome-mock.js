@@ -177,6 +177,12 @@ export function createChromeMock(opts = {}) {
     // does: new url, no `pendingUrl`, `status:'loading'`. Left unset it equals the commit,
     // i.e. exactly the old collapsed behaviour, so every existing test is untouched.
     navCompleteAfterGets: opts.navCompleteAfterGets || 0,
+    // download_file (§6, #): the terminal transition `chrome.downloads.onChanged` delivers once
+    // the verb attaches its listener — "complete" | "interrupted" | null. `null` models a download
+    // that never finishes, so the verb's deadline (its injected `sleep`) is the only thing that
+    // can end the wait. `nextDownloadId` is the id `chrome.downloads.download` hands back.
+    downloadFinalState: opts.downloadFinalState || null,
+    nextDownloadId: opts.nextDownloadId || 7,
   };
 
   // Strip the deferred-commit bookkeeping from a tab before it leaves the mock: the real
@@ -450,6 +456,27 @@ export function createChromeMock(opts = {}) {
       // is available for any test that wants to drive the registered path end-to-end.
       onEvent: new FakeEvent(),
     },
+    // chrome.downloads (§6, download_file). `download(options)` records the options and hands back
+    // a deterministic id; `search({id})` returns the ONE configured final record (`_record`);
+    // `onChanged` is a FakeEvent whose `addListener` is wrapped below to deliver the configured
+    // terminal transition AFTER the verb has attached — so the event-driven wait never races ahead
+    // of the attach the way an emit from inside `download()` would.
+    downloads: {
+      _lastOptions: null,
+      _lastId: null,
+      _record: opts.downloadRecord || null,
+      download: async (options) => {
+        await tick();
+        chrome.downloads._lastOptions = options;
+        chrome.downloads._lastId = state.nextDownloadId++;
+        return chrome.downloads._lastId;
+      },
+      search: async (_query) => {
+        await tick();
+        return chrome.downloads._record ? [chrome.downloads._record] : [];
+      },
+      onChanged: new FakeEvent(),
+    },
     alarms: {
       _alarms: { ...(opts.alarms || {}) },
       create: (name, info) => {
@@ -485,6 +512,27 @@ export function createChromeMock(opts = {}) {
       onMessage: new FakeEvent(),
     },
   };
+
+  // download_file: when the verb attaches its onChanged listener (AFTER it has awaited
+  // download()), deliver the configured terminal transition on a macrotask, tagged with the live
+  // download id. A `downloadFinalState` of null delivers nothing, modelling a download that never
+  // finishes — the verb's deadline is then the only thing that can end the wait.
+  {
+    const dlEvent = chrome.downloads.onChanged;
+    const origAdd = dlEvent.addListener.bind(dlEvent);
+    dlEvent.addListener = (fn) => {
+      origAdd(fn);
+      if (state.downloadFinalState) {
+        setTimeout(
+          () => dlEvent._emit({
+            id: chrome.downloads._lastId,
+            state: { current: state.downloadFinalState },
+          }),
+          0,
+        );
+      }
+    };
+  }
 
   // Expose the mutable state so tests can flip focus/idle and mutate the live
   // tab/window set between calls.

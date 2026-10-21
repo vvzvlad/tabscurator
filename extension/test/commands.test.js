@@ -23,6 +23,7 @@ import {
   CMD_FOCUS_TAB,
   CMD_FOCUS_WINDOW,
   CMD_NAVIGATE_TAB,
+  CMD_DOWNLOAD_FILE,
   CMD_MERGE_WINDOWS,
   CMD_EXECUTE_JS,
   CMD_EXECUTE_JS_DEBUGGER,
@@ -2596,6 +2597,153 @@ describe("click", () => {
     chromeWithOneTab5();
     const res = await dispatchCommand(frame(CMD_CLICK, { tabId: 999, selector: "#a" }), ctx());
     expect(res.error.code).toBe("no_such_tab");
+  });
+});
+
+// --- download_file -----------------------------------------------------------
+// A never-resolving sleep makes the DEADLINE never fire, so the onChanged event (delivered by the
+// mock once the verb attaches its listener) is the only thing that can end the wait — exactly the
+// race the verb runs in production, driven without real time.
+const neverSleep = () => new Promise(() => {});
+
+describe("download_file", () => {
+  it("a completed download answers {ok, path, bytes, mime, finalUrl, state} with the house options", async () => {
+    globalThis.chrome = createChromeMock({
+      downloadFinalState: "complete",
+      downloadRecord: {
+        state: "complete",
+        filename: "/home/app/Downloads/report.pdf",
+        fileSize: 2048,
+        totalBytes: 2048,
+        mime: "application/pdf",
+        finalUrl: "https://host/report.pdf",
+        error: null,
+      },
+    });
+    const dl = vi.spyOn(chrome.downloads, "download");
+    const res = await dispatchCommand(
+      frame(CMD_DOWNLOAD_FILE, { url: "https://host/report.pdf", timeoutMs: 5000 }),
+      ctx({ sleep: neverSleep }),
+    );
+    expect(res).toEqual({
+      ok: true,
+      result: {
+        path: "/home/app/Downloads/report.pdf",
+        bytes: 2048,
+        mime: "application/pdf",
+        finalUrl: "https://host/report.pdf",
+        state: "complete",
+      },
+    });
+    // The fetch rides chrome.downloads with the fixed house options (no saveAs dialog, uniquify).
+    expect(dl.mock.calls[0][0]).toEqual({
+      url: "https://host/report.pdf",
+      conflictAction: "uniquify",
+      saveAs: false,
+    });
+  });
+
+  it("passes filename through to chrome.downloads only when given", async () => {
+    globalThis.chrome = createChromeMock({
+      downloadFinalState: "complete",
+      downloadRecord: { state: "complete", filename: "/d/a.bin", fileSize: 1, mime: "x" },
+    });
+    const dl = vi.spyOn(chrome.downloads, "download");
+    await dispatchCommand(
+      frame(CMD_DOWNLOAD_FILE, { url: "https://host/a.bin", filename: "sub/a.bin", timeoutMs: 5000 }),
+      ctx({ sleep: neverSleep }),
+    );
+    expect(dl.mock.calls[0][0]).toEqual({
+      url: "https://host/a.bin",
+      filename: "sub/a.bin",
+      conflictAction: "uniquify",
+      saveAs: false,
+    });
+  });
+
+  it("an interrupted download => precondition_failed naming the error", async () => {
+    globalThis.chrome = createChromeMock({
+      downloadFinalState: "interrupted",
+      downloadRecord: { state: "interrupted", error: "NETWORK_FAILED", filename: "" },
+    });
+    const res = await dispatchCommand(
+      frame(CMD_DOWNLOAD_FILE, { url: "https://host/x.bin", timeoutMs: 5000 }),
+      ctx({ sleep: neverSleep }),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toContain("NETWORK_FAILED");
+  });
+
+  it("a non-http url is refused at the edge, chrome.downloads.download NOT called", async () => {
+    globalThis.chrome = createChromeMock();
+    const dl = vi.spyOn(chrome.downloads, "download");
+    for (const url of ["file:///etc/passwd", "data:text/plain,hi", "javascript:1", "chrome://x"]) {
+      const res = await dispatchCommand(
+        frame(CMD_DOWNLOAD_FILE, { url, timeoutMs: 5000 }),
+        ctx(),
+      );
+      expect(res.ok).toBe(false);
+      expect(res.error.code).toBe("precondition_failed");
+    }
+    expect(dl).not.toHaveBeenCalled();
+  });
+
+  it("a download that overruns timeoutMs => precondition_failed, never hangs", async () => {
+    // No terminal transition ever arrives (downloadFinalState null); the deadline (here an
+    // immediately-resolving sleep) must end the wait with a definite failure that names the budget.
+    globalThis.chrome = createChromeMock({ downloadFinalState: null });
+    const res = await dispatchCommand(
+      frame(CMD_DOWNLOAD_FILE, { url: "https://host/slow.bin", timeoutMs: 1234 }),
+      ctx({ sleep: async () => {} }),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
+    expect(res.error.message).toContain("1234ms");
+  });
+
+  it("a download already complete before the listener attaches is caught, not a false timeout", async () => {
+    // The onChanged terminal transition is MISSED (downloadFinalState null, as if it fired before
+    // the verb attached its listener), yet the record is already `complete`. With a never-firing
+    // deadline the only thing that can succeed is the post-attach search — so this would fail as a
+    // false timeout without that poll.
+    globalThis.chrome = createChromeMock({
+      downloadFinalState: null,
+      downloadRecord: {
+        state: "complete",
+        filename: "/home/app/Downloads/cached.pdf",
+        fileSize: 10,
+        mime: "application/pdf",
+        finalUrl: "https://host/cached.pdf",
+      },
+    });
+    const res = await dispatchCommand(
+      frame(CMD_DOWNLOAD_FILE, { url: "https://host/cached.pdf", timeoutMs: 5000 }),
+      ctx({ sleep: neverSleep }),
+    );
+    expect(res).toEqual({
+      ok: true,
+      result: {
+        path: "/home/app/Downloads/cached.pdf",
+        bytes: 10,
+        mime: "application/pdf",
+        finalUrl: "https://host/cached.pdf",
+        state: "complete",
+      },
+    });
+  });
+
+  it("a complete record with no filename => precondition_failed, not a pathless ok", async () => {
+    globalThis.chrome = createChromeMock({
+      downloadFinalState: "complete",
+      downloadRecord: { state: "complete", filename: "" },
+    });
+    const res = await dispatchCommand(
+      frame(CMD_DOWNLOAD_FILE, { url: "https://host/x.bin", timeoutMs: 5000 }),
+      ctx({ sleep: neverSleep }),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe("precondition_failed");
   });
 });
 

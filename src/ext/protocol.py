@@ -49,6 +49,12 @@ CMD_FOCUS_TAB = "focus_tab"
 # instance's browser to the front without touching its tabs (§10/§14.1).
 CMD_FOCUS_WINDOW = "focus_window"
 CMD_NAVIGATE_TAB = "navigate_tab"
+# Download a url THROUGH THE BROWSER (chrome.downloads) in the instance's session, landing the
+# file in the browser's download dir and answering its on-disk path. FIXED-function like
+# navigate_tab: ``url`` is DATA (never source spliced into a page eval), so NOT in
+# ``_AUDITED_COMMANDS``, no execute_js checkbox and no ``js_audit`` row. Still pause-gated and
+# behind the extension's http/https edge guard, like every verb that reaches the browser.
+CMD_DOWNLOAD_FILE = "download_file"
 CMD_MERGE_WINDOWS = "merge_windows"
 CMD_EXECUTE_JS = "execute_js"
 # CDP twin of execute_js: the extension runs the code through a TRANSIENT chrome.debugger
