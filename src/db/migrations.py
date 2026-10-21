@@ -1,8 +1,7 @@
 """Migration runner keyed on ``PRAGMA user_version``.
 
-Contract (every clause is measured — see docs/architecture.md §4 "Слой доступа к
-БД"; measured 2026-08-02 on python:3.11-slim = Python 3.11.15 / libsqlite3
-3.46.1):
+Contract (every clause is measured on python:3.11-slim / libsqlite3 3.46.1 — see
+docs/architecture.md §4 "Слой доступа к БД"):
 
 * Before the first step, take a ``VACUUM INTO`` safety copy (only when there is
   existing schema to protect — a version-0 DB has nothing to lose).

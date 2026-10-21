@@ -106,8 +106,8 @@ describe("App renders non-empty offline-first (§10)", () => {
   });
 
   it("gives each host its own swatch colour regardless of letter order", async () => {
-    // The hash used to reduce to sum(charCodes) % 10, so every anagram of a host landed
-    // on the same colour. Any permutation must be able to differ.
+    // A hash like sum(charCodes) % 10 would give every anagram of a host the same colour.
+    // Any permutation must be able to differ.
     const env = makeChrome({ tabs: [], messages: { get_identity: { instanceId: "me" } } });
     const { fetchFn } = makeFetch({ state: undefined });
     const wrapper = mount(App, {
@@ -139,11 +139,8 @@ describe("App renders non-empty offline-first (§10)", () => {
   it("parses NO urls while re-rendering — host/title/swatch are computed once per row", async () => {
     // The page re-renders every second (store.tick() moves the clock the pause countdown
     // and the instance states read), so anything the TEMPLATE computes per row is paid
-    // for every second, forever, on an idle newtab. The template used to call
-    // `swatchColor(hostOf(url))`, `cleanTitle(title, url)` (which parses again inside)
-    // and `hostOf(url)` on each row: three `new URL` per row, measured at 1276 parses
-    // per tick on a 452-row profile. Put any of them back in the template and this
-    // reddens.
+    // for every second, forever, on an idle newtab. Calling `swatchColor(hostOf(url))`,
+    // `cleanTitle(title, url)` or `hostOf(url)` from the template reddens this.
     const env = makeChrome({
       tabs: [
         { id: 1, windowId: 1, url: "https://a.example/1", title: "A1" },
@@ -244,7 +241,7 @@ describe("App renders non-empty offline-first (§10)", () => {
 
   it("keeps the window labels put while the search box filters the list", async () => {
     // The header numbers the WINDOW, not its position in the filtered view: typing in
-    // the search box used to renumber the sections under the human's eyes.
+    // the search box must not renumber the sections.
     const env = makeChrome({
       tabs: [
         { id: 1, windowId: 5, url: "https://a.com/1", title: "A1" },
@@ -667,9 +664,8 @@ describe("bookmark editing (§10 favourites column)", () => {
   });
 
   it("an EMPTY rename is a rename to the default name, not a silent no-op", async () => {
-    // Clearing the field and pressing Enter used to close the editor and change nothing —
-    // indistinguishable from Esc, with no way to tell a refusal from a lost keystroke.
-    // An empty title now commits the name the row would show anyway: the host.
+    // Clearing the field and pressing Enter must not look like Esc: an empty title
+    // commits the name the row would show anyway, the host.
     const { env, wrapper } = mountWithBookmarks();
     await flushPromises();
 
@@ -1108,9 +1104,8 @@ describe("open enrollment window row (§13)", () => {
 
   it("the row says «открываю окно…» while the arm is in flight", async () => {
     // `openEnrollment` nulls `enrollWindow` first and the button greys out on the same
-    // latch, so a server that accepts the connection and never answers used to leave a
-    // grey button next to an empty row — indistinguishable from a click that was
-    // swallowed. Reddens if the in-flight branch (or the `enrolling` half of the span's
+    // latch, so a server that accepts the connection and never answers must not leave a
+    // grey button next to an empty row. Reddens if the in-flight branch (or the `enrolling` half of the span's
     // v-if) goes away.
     const env = makeChrome({ tabs: [], messages: { get_identity: { instanceId: "me" } } });
     let release;

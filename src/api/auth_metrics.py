@@ -25,8 +25,8 @@ class AuthRejections:
     The per-reason breakdown is exported as the LABELED family
     ``curator_auth_rejections_total{reason=...}`` (:mod:`src.api.metrics` reads
     :meth:`by_reason`) — one series per coarse reason, so an alert can key on a specific
-    one (e.g. ``reason="enroll_bad_code"``). :meth:`total` remains for internal callers
-    that want the unlabelled sum; it is no longer what ``/metrics`` exports.
+    one (e.g. ``reason="enroll_bad_code"``). :meth:`total` is the unlabelled sum for
+    internal callers; ``/metrics`` does not export it.
     """
 
     def __init__(self) -> None:

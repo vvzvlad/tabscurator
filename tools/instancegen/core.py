@@ -38,18 +38,10 @@ DEFAULT_MAIN_EXTENSIONS_DIR = (
 # carries no readable `version` (an unstamped or hand-made bundle dir).
 DEFAULT_APP_VERSION = "0.1.0"
 
-# No manifest CONFIGURATION placeholders remain: `<host>` went with issue #35 (the manifest
-# is hostless, only `<all_urls>`), and the `key` field went with the extension-id pinning
-# (there is no origin allow-list left to pin an id for — see src/api/cors.py). That is what
-# made bundles non-interchangeable: a bundle configured for one host/id was NOT the same
-# artefact as another, so the universal build stamps no configuration at all.
-#
-# It does stamp build IDENTITY — `version`, and ONLY `version`; `stamp_build_identity`
-# below carries the argument for why that is a different kind of thing. Note the price: the
-# stamped manifest is RE-SERIALISED as a whole, so the built manifest.json is not a
-# byte-for-byte copy of the source one — in particular the blank lines separating the
-# manifest's sections do not survive, and `diff dist/manifest.json extension/manifest.json`
-# shows that reflow on top of the two stamped values. Every OTHER file is copied verbatim.
+# The universal build stamps no configuration into the manifest (no host, no `key`), only
+# the build identity `version` (see `stamp_build_identity`). The stamped manifest is
+# re-serialised whole, so its blank lines do not survive and `diff dist/manifest.json
+# extension/manifest.json` shows that reflow. Every other file is copied verbatim.
 
 # Directory name of an instance's empty --user-data-dir under the output root.
 _PROFILE_DIRNAME = "profile"
@@ -74,10 +66,9 @@ def slugify(text: str) -> str:
 class InstancePaths:
     """Absolute paths of one instance's on-disk layout under the output root.
 
-    Under enrollment (§13) an instance is a THIN wrapper: an empty ``--user-data-dir``
-    plus a ``.app`` whose launcher loads the SHARED universal bundle (built once by
-    ``instancegen bundle``) — there is NO per-instance extension copy and NO
-    ``instance.json``. The profile lives in the STABLE instance dir (not inside the
+    An instance is a thin wrapper: an empty ``--user-data-dir`` plus a ``.app`` whose
+    launcher loads the SHARED universal bundle (built once by ``instancegen bundle``).
+    The profile lives in the STABLE instance dir (not inside the
     movable ``.app``): the ``.app`` launcher references it by absolute path, so
     relocating the ``.app`` does not break ``--user-data-dir``, and regenerating the
     ``.app`` leaves the profile (hence ``install_uuid``) untouched (§6/§13).
@@ -142,56 +133,23 @@ def render_launcher_script(
     every Brave quit (:mod:`.state`). What is deliberately not on offer is a live shared
     session — a LevelDB has a single writer, so the profiles diverge from the copy on.
 
-    Two costs of this mechanism are STATED here rather than fixed, because fixing either
-    one costs more than it buys:
+    Two known limits of the mtime glob:
 
-    **(a) The mtime heuristic picks the newest version dir ON DISK, which is not
-    necessarily the version the main browser has ACTIVE.** Chromium unpacks an update
-    ahead of time and activates it later, recording the pending one under
-    ``idle_install_info`` in ``Secure Preferences``. Measured on the owner's real profile:
-    uBlock Origin active 1.72.2 / on disk 1.73.0, MetaMask active 13.41.0.0 / on disk
-    13.42.0.0 — 2 of 26 diverged that day. Usually this only means "slightly newer". The
-    edge that must be named: ``idle_install_info`` is ALSO where Chromium parks an update
-    requesting NEW PERMISSIONS the user has not approved yet, and a ``--load-extension``
-    extension is granted its manifest's permissions with no prompt at all — so an instance
-    can run a permission set the main browser is deliberately holding back.
+    **(a) The newest version dir on disk is not necessarily the ACTIVE one.** Chromium
+    unpacks an update ahead of time and parks it under ``idle_install_info`` in ``Secure
+    Preferences``, including updates requesting new permissions the user has not approved;
+    a ``--load-extension`` extension gets its manifest's permissions with no prompt, so an
+    instance can run a permission set the main browser is holding back.
 
     **(b) A directory under ``Extensions/`` does not mean the extension is ENABLED.**
-    Disabling an extension in ``brave://extensions`` writes ``state``/``disable_reasons``
-    into prefs and LEAVES the directory on disk; an uninstalled one also lingers there
-    until garbage collection. The glob loads both, and ``--load-extension`` activates what
-    it is given unconditionally — so an extension the owner disabled in the main browser
-    stays alive in every instance, and one they removed can come back until Chromium
-    collects the dir. The owner is NOT the only writer of ``disable_reasons``: the browser
-    sets it too — a Web Store blocklisting (an extension pulled for MALWARE), the greylist,
-    enterprise policy — and the directory is deliberately kept so the extension can be
-    restored, so a killswitch that disabled an extension in the main browser is BYPASSED in
-    every instance, which for a profile carrying a password manager and a crypto wallet is a
-    different class of consequence from "I turned it off and it still runs".
+    Disabled extensions (by the owner, or by the browser: Web Store blocklisting, greylist,
+    enterprise policy) keep their directory, and uninstalled ones linger until garbage
+    collection. ``--load-extension`` activates them unconditionally, so such a killswitch
+    is bypassed in every instance.
 
-    **Reading ``Secure Preferences`` was CONSIDERED AND REJECTED — it is not impossible.**
-    ``/usr/bin/plutil`` ships in the BASE macOS install (a real Mach-O, unlike the
-    ``/usr/bin/python3`` shim, which is only a Command Line Tools trampoline), reads
-    Chromium's JSON and answers both questions directly — ``plutil -extract
-    "extensions.settings.<id>.path" raw -o - "Secure Preferences"`` names the ACTIVE version
-    dir, ``…disable_reasons`` the enablement state, 26 sequential calls in 0.22 s wall; a
-    missing or corrupt file answers empty and complains on stderr, so falling back is
-    trivial. The mtime glob stays anyway, on these three reasons:
-
-    1. **The shipped branch would leave CI.** The tests run the GENERATED launcher
-       end-to-end on whatever machine runs them. ``plutil`` is macOS-only, so the launcher
-       would become ``plutil … || <mtime fallback>`` and a Linux runner would only ever
-       exercise the fallback — green CI on a branch that never runs on the target platform.
-       That is precisely the disease ``_tiny_repo_extension``'s docstring was written
-       against ("the shape of the clone must not decide whether the assertion runs"): here
-       the PLATFORM would decide, and the untested branch would be the shipped one.
-    2. **The fallback survives regardless.** ``Secure Preferences`` is written lazily and
-       can be caught mid-flush (verified: ``plutil`` answers empty on a truncated file), so
-       the glob remains the fallback either way — both costs above merely become RARER, at
-       double the complexity in the one script that must never fail.
-    3. **It binds to undocumented Chromium internals.** ``extensions.settings.<id>.path``
-       and ``disable_reasons`` are private schema, not an API; a rename would fall back to
-       the heuristic SILENTLY, i.e. a new silent divergence replacing the one it removed.
+    Reading ``Secure Preferences`` (e.g. via ``plutil``) would answer both, but it is
+    macOS-only (so CI would only exercise the fallback), it can be caught mid-flush (so the
+    glob stays as the fallback anyway), and it is private Chromium schema.
     """
     flags = " ".join(_sh_quote(f) for f in (extra_flags or []))
     flags_line = f"  {flags} \\\n" if flags else ""
@@ -436,27 +394,15 @@ def validate_manifest_version(version: str) -> str:
 def stamp_build_identity(manifest_text: str, *, version: str) -> str:
     """Return *manifest_text* with ``version`` set to the build stamp, and no other field.
 
-    What this stamps is build IDENTITY, and that is deliberately NOT what the deleted
-    ``stamp_manifest(manifest, host, key_b64)`` used to stamp. A baked-in ``<host>`` or
-    signing key is CONFIGURATION: it made two bundles different artefacts, which is why the
-    universal build stamps none of it. Two bundles that differ only in their version behave
-    identically — the stamp changes nothing the extension reads or does, it only lets a
-    human look at the card in brave://extensions and tell WHICH build is loaded. Do not
-    grow a ``host=``/``key=`` parameter here: that would put configuration stamping back
-    under an identity name, which is exactly the conflation the rename undid.
+    This is build IDENTITY, not configuration: two bundles that differ only in their
+    version behave identically; the stamp only lets a human tell which build is loaded on
+    the brave://extensions card. Configuration (host, signing key) is never stamped.
 
-    ``version_name`` is NOT written, and any inherited one is REMOVED. That field is the one
-    brave://extensions renders when present, and the extensions page renders it in the slot
-    BESIDE THE EXTENSION NAME — a slot with roughly ten characters of room. A human-readable
-    stamp there (``0.1.135 · edd7787 · 2026-08-07 20:58``, 35 characters) wrapped to two
-    lines and truncated the name itself, so the card read «arcextens… 0.1.135 · edd7787 · …».
-    With no ``version_name`` the page falls back to ``version`` ("if no version_name is
-    present, the version field will be used for display purposes as well"), which is exactly
-    how every other extension's card renders. So the build identity has to fit INSIDE the
-    version, and the short sha, the ``-dirty`` marker and the full build date deliberately
-    do not travel in the manifest at all — the terminal output of ``make dev-bundle`` is
-    where the full identity is printed. Do not re-add ``version_name``: it truncates the
-    name again, silently.
+    ``version_name`` is not written, and any inherited one is removed: brave://extensions
+    renders it beside the extension name in a slot of roughly ten characters, and a longer
+    string truncates the name. Without it the page shows ``version``, so the build identity
+    has to fit inside the version; the sha, ``-dirty`` marker and full date are printed by
+    ``make dev-bundle`` in the terminal instead.
 
     Pure text in, pure text out — the caller supplies the value, this never reads git or
     the clock.
@@ -464,10 +410,8 @@ def stamp_build_identity(manifest_text: str, *, version: str) -> str:
     The file is RE-SERIALISED WHOLE, not patched in place: the text is parsed, the value is
     set and ``json.dumps(indent=2, ensure_ascii=False)`` writes it back out. That is the
     robust path — the output is always valid JSON, every key keeps its value and its order,
-    and the Russian prose in the ``//``-comment keys stays unescaped. It is NOT
-    byte-surgical though: the blank lines separating the manifest's sections do not survive
-    the round-trip, so ``diff dist/manifest.json extension/manifest.json`` shows the reflow
-    as well as the stamped value — more than one changed line, by design.
+    and the Russian prose in the ``//``-comment keys stays unescaped. The blank lines
+    separating the manifest's sections do not survive the round-trip.
     """
     validate_manifest_version(version)
 
@@ -669,12 +613,9 @@ def _clear_instance_dir_keeping_profile(root: Path) -> None:
     """Empty a regenerated instance's dir but KEEP ``profile/`` (§6/§13 invariant).
 
     Everything the generator writes (the ``.app``) it can write again; the profile it
-    CANNOT. The profile holds the ``install_uuid`` minted by the SW on first run —
-    plus the session, cookies and saved passwords. An
-    ``--overwrite`` that rmtree'd the whole root silently destroyed all of it, and
-    the regenerated instance came back with a NEW install_uuid: a reconnect the
-    service is entitled to treat as a different install. Regeneration is therefore a
-    bundle-level operation only, exactly as ``InstancePaths`` documents.
+    CANNOT. The profile holds the ``install_uuid`` minted by the SW on first run,
+    plus the session, cookies and saved passwords; a new install_uuid would make the
+    service treat the regenerated instance as a different install.
     """
     for child in root.iterdir():
         if child.name == _PROFILE_DIRNAME:
@@ -694,13 +635,9 @@ def _clear_instance_dir_keeping_profile(root: Path) -> None:
 class GenerateResult:
     """What ``generate`` produced: the instance's paths, and nothing that duplicates them.
 
-    There is deliberately NO ``launch_command`` here anymore. It used to carry the argv
-    ``build_launch_command`` reconstructed — Brave plus the two per-instance flags — and
-    with extension sync on that reconstruction became a LIE: the launcher resolves
-    ``--load-extension`` at launch time into the bundle plus ~26 main-profile dirs, while
-    the field still named the bundle alone. An operator copying it got a browser without
-    Bitwarden and concluded the sync was broken. The launcher script is the single source
-    of truth for the argv, so ``paths.launcher`` is what callers are given.
+    There is no argv field: the launcher resolves ``--load-extension`` at launch time
+    (bundle plus the synced main-profile dirs), so the launcher script is the single source
+    of truth and ``paths.launcher`` is what callers are given.
     """
 
     paths: InstancePaths
@@ -747,15 +684,12 @@ def generate_instance(
 ) -> GenerateResult:
     """Materialise one instance's ``.app`` + empty profile under *out_root*.
 
-    Under enrollment (§13) an instance NO LONGER carries its own extension copy or an
-    ``instance.json``: the whole fleet loads the SINGLE universal bundle built once by
-    ``instancegen bundle`` (§9). This therefore writes only three things — an empty
-    ``--user-data-dir``, the ``.app`` (launcher + Info.plist + icon), and nothing else —
-    with the launcher's ``--load-extension`` pointing at the SHARED *bundle_dir*. Two
-    instances built against the same *bundle_dir* load the exact same extension dir, and
-    therefore the same ``chrome-extension://`` id — which is now simply the hash of that
-    shared load path, with nothing pinning it. Nothing depends on the id being stable: no
-    origin is checked anywhere anymore (see :mod:`src.api.cors`).
+    The whole fleet loads the SINGLE universal bundle built once by ``instancegen bundle``
+    (§9), so this writes only an empty ``--user-data-dir`` and the ``.app`` (launcher +
+    Info.plist + icon), with the launcher's ``--load-extension`` pointing at the SHARED
+    *bundle_dir*. Instances on the same *bundle_dir* share the ``chrome-extension://`` id
+    (the hash of the load path); nothing depends on it, as no origin is checked (see
+    :mod:`src.api.cors`).
 
     The service address and the per-install secret are NOT baked in — the extension gets
     them through the enrollment settings UI, so ``generate`` needs no serviceUrl and no
@@ -817,13 +751,10 @@ def generate_instance(
     paths.launcher.chmod(0o755)
     # The .app reports the version the shared bundle carried AT INSTANCE-GENERATION TIME,
     # read from that bundle's manifest. It is a SNAPSHOT, not a live reading: `make
-    # dev-bundle` rebuilds the shared bundle and touches no instance, so from the next
-    # rebuild on this plist names an older build. That is acceptable because the plist is
-    # not where anyone checks which build is loaded — the extension card in
-    # brave://extensions is (it renders the manifest's `version`) and it stays the
-    # source of truth. What this does buy is that a freshly generated .app does not
-    # advertise a version the bundle never had. An unstamped/hand-made bundle (no readable
-    # `version`) falls back to DEFAULT_APP_VERSION.
+    # dev-bundle` rebuilds the shared bundle and touches no instance, so after a rebuild
+    # this plist names an older build; the extension card in brave://extensions is the
+    # source of truth. An unstamped/hand-made bundle (no readable `version`) falls back to
+    # DEFAULT_APP_VERSION.
     paths.info_plist.write_text(
         build_info_plist(
             title,

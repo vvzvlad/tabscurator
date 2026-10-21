@@ -6,7 +6,7 @@ in :mod:`src.settings`, these rows are mutable while the service runs. Callers
 below.
 
 Each function runs inside one ``Database.write`` / ``Database.read`` call (no
-``await`` inside; Фаза 2 contract). Values are stored as text.
+``await`` inside). Values are stored as text.
 """
 
 from __future__ import annotations

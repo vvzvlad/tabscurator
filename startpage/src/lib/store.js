@@ -110,8 +110,7 @@ export function createStore(deps = {}) {
   // --- the clock (§10) ------------------------------------------------------
   // Every timestamp the server hands us — snapshot_at, last_seen_at, stopped_at — is
   // on the SERVER's clock. Comparing them to Date.now() means comparing two clocks: a
-  // couple of seconds of laptop drift against a 3 s staleness threshold either paints
-  // every instance "зеркало устарело" forever or hides a genuinely half-open socket.
+  // couple of seconds of laptop drift is enough to misjudge every server deadline and age.
   // `StateResponse.server_now` exists precisely so the client can measure the offset
   // (src/db/state.py: "the client decides … against server_now"), so we do all
   // comparisons in the SERVER scale.
@@ -365,7 +364,7 @@ export function createStore(deps = {}) {
       id: i.id,
       title: i.id, // the id IS the name (§6)
       status: instanceStatus(i, serverNow()),
-      // A "space" is RAISABLE (§62 item 3) only when it is a FOREIGN, connected instance
+      // A "space" is RAISABLE only when it is a FOREIGN, connected instance
       // we have SOME window id for: raising our own browser from its own newtab is a
       // no-op, and a closed instance is unreachable.
       //
@@ -373,10 +372,9 @@ export function createStore(deps = {}) {
       // screen RIGHT NOW, null when the browser is unfocused" (§5, extension/src/
       // snapshot.js) — and a foreign browser is unfocused exactly when you want to
       // raise it, so the field is null precisely in the case this button exists for.
-      // Gating on it made the row dead most of the time and alive in a narrow window
-      // right after leaving that instance. Any window of the instance does the job:
-      // a single chrome.windows.update({focused:true}) raises the browser from ANY
-      // window state (ledger row 33а), so we fall back to one derived from its tabs.
+      // Any window of the instance does the job: a single
+      // chrome.windows.update({focused:true}) raises the browser from ANY window state,
+      // so we fall back to one derived from its tabs.
       focusedWindowId: raisableWindowId(i),
       raisable:
         i.id !== ownInstanceId.value &&
@@ -456,16 +454,12 @@ export function createStore(deps = {}) {
 
     // Config (base + token) for the background refresh; without them the page stays
     // offline-but-rendered. The SW is the ONLY source (§7): the validated address setting
-    // + the RAW instance secret (slice C / option A — the /api Bearer IS the raw secret;
-    // the server hashes it).
+    // + the RAW instance secret (the /api Bearer IS the raw secret; the server hashes it).
     //
-    // There is NO instance.json fallback here on purpose. It used to read `config.token`,
-    // a field that does not exist in any bundle anymore (the shared token is gone), so it
-    // could only ever set `token = undefined` — and its `if (config.serviceUrl)
-    // hasAddress = true` actively LIED: a bundle that ships a bootstrap serviceUrl would
-    // switch off the "адрес не настроен" banner on a profile that has no secret and
-    // cannot talk to anything. `hasAddress` now comes from the SW alone, which is also
-    // the only side that can tell a usable address from a refused one.
+    // There is NO instance.json fallback on purpose: a bootstrap serviceUrl there would
+    // switch off the "адрес не настроен" banner on a profile that has no secret.
+    // `hasAddress` comes from the SW alone, the only side that can tell a usable address
+    // from a refused one.
     const cred = await getCredential(chromeApi);
     if (cred && cred.serviceUrl && cred.secret) {
       base = httpBaseFromServiceUrl(cred.serviceUrl);
@@ -490,12 +484,12 @@ export function createStore(deps = {}) {
     // (permission removed, older Chrome) still paints everything else, which is the
     // offline-first contract, not a nicety.
     //
-    // ORDER OF EFFECTS IS UNCHANGED: nothing is assigned until every read has landed,
+    // ORDER OF EFFECTS: nothing is assigned until every read has landed,
     // and the queue is still applied BEFORE the cache is rendered — so the very first
     // paint shows an offline-added quick link even if the SW's cache write lost the
     // race.
     //
-    // TODO: assign each source AS IT LANDS instead of waiting for Promise.all. Today the
+    // TODO: assign each source AS IT LANDS instead of waiting for Promise.all. The
     // SLOWEST of the five gates all the others — a large bookmark tree (getTree walks the
     // whole profile) or chrome.history.search holds back the tab list, which is the one
     // thing that is always ready first and the one the human actually looks at. Left as
@@ -1054,7 +1048,7 @@ export function createStore(deps = {}) {
       if (status >= 200 && status < 300) {
         // The server started the automation and ran a pass; reflect only what the
         // verb itself decided: the stop is lifted, and whatever the stop gate
-        // refused is no longer refused. The latch (resumePending/pendingPlan) is
+        // refused is not refused any more. The latch (resumePending/pendingPlan) is
         // NOT cleared optimistically — a DELETE while stopped runs a NORMAL-gated
         // pass, so the latch may survive or re-arm; the refresh() below reports it
         // truthfully instead of this side guessing.

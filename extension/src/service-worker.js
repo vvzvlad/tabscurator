@@ -202,14 +202,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === "get_credential") {
     // The startpage/popup ask the SW for the /api base + Bearer (§7): the address
-    // setting + the RAW instance secret (slice C / option A). The raw secret crosses only
+    // setting + the RAW instance secret. The raw secret crosses only
     // SW->page in-process, then the TLS'd /api call — the server hashes it on receipt.
     //
     // `addressError` rides along for the SAME reason get_connection_state carries it: the
     // TLS gate resolves a REFUSED address to null, so `serviceUrl: null` alone cannot tell
-    // "never configured" from "you typed ws://host and we refused it". Without it the popup
-    // told an operator who HAD filled the field that no address was configured — the one
-    // message guaranteed not to lead them to the fix.
+    // "never configured" from "you typed ws://host and we refused it".
     connection
       .init()
       .then(async () => {

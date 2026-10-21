@@ -165,7 +165,7 @@ async def test_close_clears_the_window(tmp_path):
 
 
 async def test_rearm_mints_a_fresh_code(tmp_path):
-    # Issue #35: "код новый на каждое открытие окна" — a re-open replaces the code.
+    # "код новый на каждое открытие окна": a re-open replaces the code.
     db = await _make_db(tmp_path)
     try:
         first = await db.write(lambda c: enroll.arm_enroll_window(c, now=1_000, minutes=10))
@@ -183,11 +183,10 @@ async def test_a_code_without_a_deadline_never_surfaces(tmp_path):
     one — closed, ``code=None``, ``until=None``.
 
     The contract the docstring states (and that ``/admin`` relies on) is that a caller may
-    render ``state.code`` without separately checking ``state.open``. The absent-deadline
-    branch returned the STORED code, so any state where the deadline row is
-    missing/blank/garbage while the code row survives — a half-written pair, a hand-edited
-    settings table, a partially restored backup — handed back a live-looking code for a
-    window that is not open. Reddens if that branch goes back to passing ``code``.
+    render ``state.code`` without separately checking ``state.open``. A missing/blank/
+    garbage deadline row with a surviving code row (a half-written pair, a hand-edited
+    settings table, a partially restored backup) must not hand back a live-looking code
+    for a window that is not open. Fails if that branch returns the stored ``code``.
     """
     db = await _make_db(tmp_path)
     try:

@@ -47,13 +47,12 @@ def test_loads_defaults_from_section4(monkeypatch):
 
 
 def test_shared_ext_secret_field_is_gone(monkeypatch):
-    # Enrollment (§13) removed the shared /ext token entirely (#37). Settings must carry
+    # There is no shared /ext token (§13). Settings must carry
     # no such field — /ext and /api/* authenticate by a per-instance secretHash and
     # ADMIN_TOKEN, never a config token. Redden: re-add the field.
     #
-    # The removed field name is spelled INDIRECTLY here on purpose: #37 acceptance 1 is a
-    # repo-wide purge (`grep -rn` for the literal must find nothing but git history), and
-    # this assert-it-is-gone test must not itself reintroduce the literal.
+    # The field name is spelled INDIRECTLY on purpose: `grep -rn` for the literal must find
+    # nothing in the repo, and this test must not itself reintroduce it.
     removed_field = "ext" + "_token"
     _base_env(monkeypatch)
     s = Settings(_env_file=None)
@@ -215,14 +214,9 @@ def test_out_of_range_enrollment_knobs_fail_at_startup(monkeypatch, var, value, 
     """Each of these values SILENTLY disables a subsystem rather than erring.
 
     Project convention (AGENTS.md): a misconfigured value fails at startup instead of
-    producing a service that looks healthy and does nothing. These knobs arrived unbounded,
-    so a typo bought a running curator with /ext shut or a window closed on arrival — each
-    visible only as an absence. Reddens if a bound is dropped: the Settings object builds
-    and the process starts.
-
-    Two knobs left this list rather than losing their bound: ENROLL_MAX_PENDING and
-    ENROLL_REQUEST_TTL_MIN are GONE with the pending-request table (§6) — see
-    ``test_the_retired_enrollment_knobs_are_gone`` below.
+    producing a service that looks healthy and does nothing; here a typo would give a
+    running curator with /ext shut or a window closed on arrival. Fails if a bound is
+    dropped: the Settings object builds and the process starts.
     """
     _base_env(monkeypatch)
     monkeypatch.setenv(var, value)
@@ -245,18 +239,13 @@ def test_enroll_window_max_is_the_arming_clamp(monkeypatch):
 
 
 def test_the_retired_enrollment_knobs_are_gone_and_a_leftover_value_is_harmless(monkeypatch):
-    """ENROLL_MAX_PENDING / ENROLL_REQUEST_TTL_MIN no longer exist, and a `.env` that
+    """ENROLL_MAX_PENDING / ENROLL_REQUEST_TTL_MIN do not exist, and a `.env` that
     still sets them must not stop the service.
 
-    They governed the ``enroll_requests`` table — a ceiling on the pending list and a TTL
-    for its rows — and enrolment is one step now (§6), so neither has anything to bound.
-    Their cross-validator (TTL >= ENROLL_WINDOW_MIN, which existed because an approve had
-    to happen while the window was still open) went with them.
-
-    The second half is the upgrade path: every deployed `.env` still carries both
-    variables, and `extra="ignore"` is what keeps that from being a failed startup on the
-    release that removes them. Reddens if the fields are quietly re-added (the attribute
-    check) or if the model is switched to `extra="forbid"` (the leftover env fails).
+    Enrolment is one step (§6), so there is no pending-request table for them to bound.
+    Deployed `.env` files may still carry both variables, and `extra="ignore"` keeps that
+    from failing startup. Fails if the fields are re-added (the attribute check) or if the
+    model is switched to `extra="forbid"` (the leftover env fails).
     """
     _base_env(monkeypatch)
     monkeypatch.setenv("ENROLL_MAX_PENDING", "64")
@@ -264,7 +253,7 @@ def test_the_retired_enrollment_knobs_are_gone_and_a_leftover_value_is_harmless(
     settings = Settings(_env_file=None)
     assert not hasattr(settings, "enroll_max_pending")
     assert not hasattr(settings, "enroll_request_ttl_min")
-    # A nonsense leftover is equally harmless — it is no longer a knob at all.
+    # A nonsense leftover is equally harmless: it is not a knob at all.
     monkeypatch.setenv("ENROLL_REQUEST_TTL_MIN", "0")
     assert Settings(_env_file=None).enroll_window_min == 10
 

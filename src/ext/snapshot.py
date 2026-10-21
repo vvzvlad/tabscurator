@@ -1,7 +1,6 @@
 """Snapshot application: the single sync ``fn(conn)`` handed to ``Database.write``.
 
-The whole of §6 "Снимок" happens in ONE transaction (Фаза 2 contract: no
-``await`` inside): optional session-change clear, UPSERT of every TabInfo, replace
+The whole of §6 "Снимок" happens in ONE transaction (no ``await`` inside): optional session-change clear, UPSERT of every TabInfo, replace
 of the window list, the instance-level update, and finally the ``sent_at``-bounded
 delete. The three load-bearing invariants live here so a mutation test that
 removes one of them reddens a direct call:

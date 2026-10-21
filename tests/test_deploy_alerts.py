@@ -1,16 +1,12 @@
 """deploy/alerts.yml must stay a loadable PROMETHEUS rule file (§12).
 
 Prometheus and vmalert unmarshal this schema STRICTLY: one unknown field rejects the
-WHOLE file, so the curator ends up with no alerts at all — including `curator-down`,
-the one rule that reports the service is gone. A rule file that silently fails to load
-is indistinguishable from a healthy system, which is why this is worth a test rather
-than a review comment.
+WHOLE file, so the curator ends up with no alerts at all, including `curator-down`, the
+one rule that reports the service is gone.
 
-Validated for real with `promtool check rules deploy/alerts.yml` and
-`promtool test rules deploy/alerts_test.yml` (Prometheus 2.53.3) during issue #37;
 promtool is not a project dependency, so the schema check below is the CI-portable
-stand-in. Keep both in mind when editing: this test encodes promtool's field sets, not a
-guess at them.
+stand-in for `promtool check rules deploy/alerts.yml` and `promtool test rules
+deploy/alerts_test.yml`. It encodes promtool's field sets, not a guess at them.
 """
 
 from __future__ import annotations
@@ -28,9 +24,8 @@ ALERTS_YML = REPO_ROOT / "deploy" / "alerts.yml"
 SRC_DIR = REPO_ROOT / "src"
 
 # Fields promtool accepts, from prometheus/model/rulefmt. Anything outside these sets
-# fails the strict unmarshal — `noDataState` (a Grafana-MANAGED alert concept, whose
-# provisioning format is a different schema entirely) is the concrete regression this
-# guards: it was present on every rule and made the file load nowhere.
+# fails the strict unmarshal, e.g. `noDataState` (a Grafana-MANAGED alert concept with a
+# different provisioning schema).
 _GROUP_FIELDS = {"name", "interval", "query_offset", "limit", "rules", "labels"}
 _RULE_FIELDS = {
     "record", "alert", "expr", "for", "keep_firing_for", "labels", "annotations",
@@ -91,8 +86,7 @@ def test_no_rule_uses_the_forbidden_time_minus_metric_form():
 def test_target_loss_also_fires_when_the_target_is_absent():
     # Two shapes of "down": scraped-and-failing (`up == 0`) and gone from service
     # discovery (no `up` series at all). A bare `up == 0` matches nothing in the
-    # second case — an empty result never fires — so `absent()` must cover it.
-    # This is the semantics the removed `noDataState: Alerting` used to carry.
+    # second case (an empty result never fires), so `absent()` must cover it.
     down = next(r for r in _rules() if r["alert"] == "curator-down")
     assert 'up{job="curator"} == 0' in down["expr"]
     assert 'absent(up{job="curator"})' in down["expr"]
@@ -161,13 +155,9 @@ def test_every_metric_named_in_a_rule_actually_exists():
 
 
 def test_enroll_window_gauge_is_covered_by_a_rule():
-    # §37 acceptance 5, the direction the name-guard does NOT cover: #35 exports
-    # curator_enroll_window_seconds_remaining, and a series with no rule is DEAD — scraped
-    # forever, alerted on never. This test used to assert the OPPOSITE (no rule may
-    # mention the gauge) because the pre-clamp gauge went negative forever after any
-    # ordinary window, making the then-proposed `< 0` rule unable to resolve. The clamp
-    # landed (56c073a: >0 open, 0 otherwise), so that prohibition now only froze the metric
-    # dead. Redden: delete the rule.
+    # The direction the name-guard does NOT cover: a series with no rule is scraped
+    # forever and alerted on never. The gauge is clamped (>0 open, 0 otherwise), so a rule
+    # on it can resolve. Fails if the rule is deleted.
     covering = [
         r for r in _rules() if "curator_enroll_window_seconds_remaining" in r["expr"]
     ]
@@ -188,15 +178,12 @@ def test_window_held_open_rule_cannot_fire_on_one_ordinary_window():
 
     "One armed window" is measured against ENROLL_WINDOW_MAX_MIN, the hard CEILING, not
     against ``enroll_window_min``'s default. ENROLL_WINDOW_MIN is operator config bounded
-    by ``le=ENROLL_WINDOW_MAX_MIN``; pinning `for:` to the 10m default let a `for: 15m`
-    ship that pages on ONE ordinary arm at a perfectly legal ENROLL_WINDOW_MIN=20 — and
-    a test written against the default is green for exactly that bug. Asserting against
-    the ceiling covers every value the settings field will accept, so the same mistake
-    cannot return the next time the default moves.
+    by ``le=ENROLL_WINDOW_MAX_MIN``, so a `for:` that only clears the default would page on
+    ONE ordinary arm at a legal larger ENROLL_WINDOW_MIN. Asserting against the ceiling
+    covers every value the settings field accepts.
 
-    Redden either way: drop `for:` to at-or-below the ceiling and a legal single window
-    starts paging; raise the gauge's clamp back to a negative and the second half stops
-    meaning anything.
+    Fails either way: drop `for:` to at-or-below the ceiling and a legal single window
+    starts paging; let the gauge go negative and the second half stops meaning anything.
     """
     from src.api.metrics import Snapshot, _enroll_window_seconds_remaining
     from src.curator.enroll import ENROLL_WINDOW_MAX_MIN
@@ -290,10 +277,9 @@ def test_every_enrollment_signal_has_an_alert_rule():
         assert needle in exprs, f"exported but never alerted on: {needle}"
 
 
-# Reason labels that deliberately have NO rule. The default is the other way round — a
-# reason label needs an alert unless it is listed here WITH a reason — because the
-# thing this guards against is exactly what happened to the retired `enroll_secret_conflict`: a new
-# refusal reason was added, exported, and the hand-written needle list said nothing.
+# Reason labels that deliberately have NO rule. The default is the other way round: a
+# reason label needs an alert unless it is listed here WITH a reason, so a new refusal
+# reason cannot be exported without a decision.
 #
 # Each entry is excluded because a rule on it would be noise, not because nobody got to
 # it.
@@ -306,55 +292,44 @@ def test_every_enrollment_signal_has_an_alert_rule():
 #   * `enroll_closed` — likewise normal: any client that reconnects outside an open window
 #     gets it, which is most of the time on a healthy install.
 #   * `enroll_bad_id` — the proposed instance id is outside [A-Za-z0-9._-]{1,64}. The
-#     extension validates the SAME expression in its options page before it sends, and
-#     refuses to save or submit a name that fails, so an honest client cannot produce this
-#     label at all; reaching it means a hand-made frame or a stale bundle. And it has no
-#     operational consequence to alert on: nothing was created, nobody else was denied
-#     anything, and the one person affected is looking straight at the reason — the
-#     extension shows it verbatim in the settings page they just typed the name into.
-#     Its sibling `enroll_id_taken` DOES get a rule (curator-enroll-id-taken, threshold 0)
-#     precisely because it lacks all three of those: it can happen to a correct client, it
-#     leaves that browser unable to enrol, and — with the pending list gone — the counter
-#     is the only trace an operator can find.
+#     extension validates the SAME expression in its options page before it sends, so an
+#     honest client cannot produce this label; reaching it means a hand-made frame or a
+#     stale bundle. Nothing was created, nobody else was denied anything, and the extension
+#     shows the reason verbatim to the one person affected. Its sibling `enroll_id_taken`
+#     DOES get a rule (curator-enroll-id-taken, threshold 0) because it can happen to a
+#     correct client, leaves that browser unable to enrol, and the counter is the only
+#     trace an operator can find.
 #   * `auth` — documented in `hello_reject_reason` as a last-line guard the channel is
 #     supposed to have already handled with a more specific reason. It is a belt-and-
 #     suspenders branch, not an operational signal.
-#   * `instance` — REJECT_INSTANCE is not produced anywhere since the secret-based hello
-#     landed (the id is server-assigned now); the constant is kept only for the wire
-#     vocabulary. There is no series to alert on.
+#   * `instance` — REJECT_INSTANCE is not produced anywhere (the id is server-assigned);
+#     the constant is kept only for the wire vocabulary. There is no series to alert on.
 #   * `protocol` / `enroll_protocol` — a version skew during a rollout. It is per-instance
 #     and self-describing: `reject_reason='protocol'` lands on the instances row and turns
 #     the status red, and if the whole fleet is skewed the OUTCOME is already covered by
 #     curator-instance-absent / curator-instance-snapshot-stale.
-#   (`origin` used to be listed here — a deploy-time EXT_ALLOWED_ORIGINS mistake. The
-#   verdict itself is gone now: the allow-list was retired, so no reason label is emitted
-#   and there is nothing to excuse.)
 #   * `duplicate_instance` — two browsers loading one profile's credential. It resolves as
 #     soon as one of them goes away and it, too, is recorded on the row.
 #
-# HTTP auth paths (src/api/*, src/mcpiface/*) — these became visible to this guard only
-# when the label source stopped being src/ext/protocol.py alone, so each needed the
-# decision made for the first time:
+# HTTP auth paths (src/api/*, src/mcpiface/*):
 #   * `admin_session` — the AMBIENT "no session presented" label: every browser that opens
-#     /admin before logging in ticks it. This is the label the ADMIN_TOKEN brute-force rule
-#     was deliberately split AWAY from (see the test below); a rule on it is noise at any
+#     /admin before logging in ticks it. The ADMIN_TOKEN brute-force rule keys on
+#     `admin_bad_token` instead (see the test below); a rule on this one is noise at any
 #     threshold a real brute force could reach.
 #   * `api_token` — a 401 on /api/*. A REVOKED (or still-pending) instance is the designed
 #     steady state here: its startpage keeps opening newtabs and its service worker keeps
-#     flushing quick-links, each with a credential the service now refuses, so the counter
-#     climbs for as long as the extension stays installed. That is ordinary post-revocation
-#     operation — the same reasoning that excuses `revoked` on the hello path — so no
-#     threshold separates it from token guessing.
+#     flushing quick-links, each with a credential the service refuses, so the counter
+#     climbs for as long as the extension stays installed. No threshold separates that
+#     from token guessing.
 #   * `metrics_token` — a 401 on /metrics, which is the endpoint the counter is read
 #     THROUGH. If the scrape credential is wrong, Prometheus cannot scrape this series at
 #     all, so a rule on it is unreachable by construction; the real outcome (no scrape) is
 #     what `curator-down` fires on, `up == 0` covering exactly this.
 #   * `mcp_token` — a bad Bearer on /mcp. Same credential as `admin_bad_token`, and the
-#     residual risk is stated rather than hidden: a guesser who picks /mcp instead of the
-#     login form is not paged. It is excluded anyway because the >5-in-10m threshold's
-#     premise does not hold here — /mcp has no human form, only the owner's own agents,
-#     which RETRY automatically, so one stale token in an agent config clears 5 attempts in
-#     seconds. `admin_bad_token` keeps the rule because a human at a login form does not.
+#     residual risk is accepted: a guesser who picks /mcp instead of the login form is not
+#     paged. /mcp has no human form, only the owner's own agents, which RETRY
+#     automatically, so one stale token in an agent config clears the >5-in-10m threshold
+#     in seconds. `admin_bad_token` keeps the rule because a human at a login form does not.
 _REASONS_WITHOUT_A_RULE = frozenset({
     "auth",
     "instance",
@@ -374,16 +349,9 @@ _REASONS_WITHOUT_A_RULE = frozenset({
 
 # --- Where the reason labels come from ---------------------------------------
 #
-# The needle list stopped being hand-written one round ago, but its SOURCE stayed
-# hand-picked: the enumeration read the constants of `src/ext/protocol.py` and nothing
-# else. `cors_preflight` (src/api/cors.py) never passes through that module, so it was
-# exported, documented in deploy/DEPLOY.md, given no rule — and this guard said nothing.
-# That is the same defect one floor up from the `enroll_secret_conflict` miss the guard was
-# written for: the LIST was derived, the CHOICE OF SOURCE was not.
-#
-# So the source is now every WRITER of the counter, found by parsing all of `src/`: each
+# The source is every WRITER of the counter, found by parsing all of `src/`: each
 # `incr(<arg>)` call on the counter contributes the label(s) it can emit, wherever it lives
-# and however the module reached the counter — by name (`auth_rejections.incr`) or through
+# and however the module reached the counter: by name (`auth_rejections.incr`) or through
 # its module (`auth_metrics.auth_rejections.incr`). A new writer in a new module therefore
 # needs no edit here. Three argument shapes are understood:
 #
@@ -392,7 +360,7 @@ _REASONS_WITHOUT_A_RULE = frozenset({
 #   3. a runtime-computed argument    -> resolved by `_DYNAMIC_INCR_SITES` below.
 #
 # Anything else FAILS the test instead of contributing nothing, so an unreadable new call
-# shape is a red test rather than a fresh silent hole.
+# shape is a red test rather than a silent hole.
 
 
 def _src_modules() -> list[tuple[str, ast.Module]]:
@@ -438,13 +406,11 @@ def _src_tree(rel: str) -> ast.Module:
 def _literal_reason_args(rel: str, func_name: str, position: int) -> set[str]:
     """String LITERALS passed as the reason argument of ``func_name(...)`` inside ``rel``.
 
-    The two resolvers below enumerate the protocol CONSTANTS, because that is where every
-    reject reason is born today — but nothing enforces it. A reason handed to the helper
-    as a bare literal (``_reject_enroll(ws, app, "new_thing")``) emits
-    ``enroll_new_thing`` just the same, no ``ENROLL_*`` constant would ever name it, and
-    the label would reach /metrics with no rule while this whole file stayed green.
-    Reading the call sites costs one AST walk and closes that door: a literal becomes a
-    label like any other and has to be alerted on or excused.
+    The two resolvers below enumerate the protocol CONSTANTS, but nothing forces a reason
+    to be one. A reason handed to the helper as a bare literal (``_reject_enroll(ws, app,
+    "new_thing")``) emits ``enroll_new_thing`` with no ``ENROLL_*`` constant naming it, so
+    the call sites are read too: a literal becomes a label like any other and has to be
+    alerted on or excused.
     """
     out: set[str] = set()
     for node in ast.walk(_src_tree(rel)):
@@ -546,16 +512,12 @@ def _dotted(node: ast.expr) -> str | None:
 def _imports_counter(tree: ast.Module) -> bool:
     """Does this module reach the counter's module at all, by ANY import form?
 
-    All three forms have to count, because the writer scan now recognises the call shapes
-    all three produce::
+    All three forms count, because the writer scan recognises the call shapes all three
+    produce::
 
         from src.api.auth_metrics import auth_rejections   # auth_rejections.incr(...)
         from src.api import auth_metrics                   # auth_metrics.auth_rejections.incr(...)
         import src.api.auth_metrics                        # src.api.auth_metrics.auth_rejections.incr(...)
-
-    Matching only the first left the two module-import forms outside `importers`, so a
-    writer using them was neither required to be a known writer nor reported as
-    unaccounted — the label it emits went into /metrics with no rule and nothing reddened.
     """
     package, _, leaf = _COUNTER_MODULE.rpartition(".")
     for node in ast.walk(tree):
@@ -625,16 +587,13 @@ def test_every_module_touching_the_counter_is_a_known_writer_or_reader():
     """A module that imports the rejections counter must either increment it in a shape
     `_scan_incr_sites` understands, or be listed as a reader.
 
-    Without this, the one way a new label could still slip past the scan is an aliased
-    import (`from src.api.auth_metrics import auth_rejections as ar`) — the attribute match
-    keys on the name `auth_rejections`, so `ar.incr("new_reason")` would contribute nothing
-    and raise nothing. Redden: alias the import in any module that increments.
+    Without this, an aliased import (`from src.api.auth_metrics import auth_rejections as
+    ar`) would slip past the scan: the attribute match keys on the name `auth_rejections`,
+    so `ar.incr("new_reason")` would contribute nothing and raise nothing. Fails if the
+    import is aliased in any module that increments.
 
-    For that backstop to hold, `importers` has to see EVERY way of reaching the module —
-    `from src.api import auth_metrics` and `import src.api.auth_metrics` included. It did
-    not, and those two are not exotic: they produce a perfectly ordinary
-    `auth_metrics.auth_rejections.incr(...)` writer that used to fall outside the writer
-    scan AND outside this net at the same time, i.e. through both gates at once.
+    For that backstop to hold, `importers` has to see EVERY way of reaching the module,
+    `from src.api import auth_metrics` and `import src.api.auth_metrics` included.
     """
     importers = {rel for rel, tree in _src_modules() if _imports_counter(tree)}
     assert importers, "nobody imports the counter — the import match stopped matching"
@@ -652,18 +611,16 @@ def test_every_module_touching_the_counter_is_a_known_writer_or_reader():
 def test_a_module_qualified_writer_is_recognised_as_both_writer_and_importer():
     """The scan must see a writer that imports the MODULE, not the counter name.
 
-    Asserted on synthetic source because no module under src/ is written this way today —
-    which is exactly why the hole survived: both halves of the net keyed on the one form
-    src/ happens to use. A writer spelled
+    Asserted on synthetic source because no module under src/ is written this way. A
+    writer spelled
 
         from src.api import auth_metrics
         auth_metrics.auth_rejections.incr("new_reason")
 
-    used to miss the writer match (`func.value` is an Attribute, not a Name) AND the
-    importer match (`node.module` is "src.api", not "src.api.auth_metrics"), so its label
-    landed in /metrics with no rule while every test in this file stayed green. Both
-    halves are checked here, and the fully qualified `import src.api.auth_metrics` form
-    with it.
+    needs the writer match to handle `func.value` being an Attribute, not a Name, and the
+    importer match to handle `node.module` being "src.api", not "src.api.auth_metrics".
+    Both halves are checked here, and the fully qualified `import src.api.auth_metrics`
+    form with it.
     """
     via_package = ast.parse(
         "from src.api import auth_metrics\n"
@@ -703,12 +660,10 @@ def test_a_literal_reject_reason_still_becomes_a_label_needing_a_rule():
     """A reason passed to the reject helpers as a bare string must reach the label set.
 
     `_DYNAMIC_INCR_SITES` resolves the two computed `incr` sites from the protocol
-    CONSTANTS, which is where every reason lives today — but the helpers take a plain
-    `str`, so `_reject_enroll(ws, app, "new_thing")` would emit `enroll_new_thing` with no
-    constant to enumerate it. The call sites (and the one gate whose verdict the enroll
-    call forwards) are therefore read for literals too. Asserted on synthetic source: the
-    real src/ passes constants only, which is precisely the state in which this could rot
-    unnoticed.
+    CONSTANTS, but the helpers take a plain `str`, so `_reject_enroll(ws, app,
+    "new_thing")` would emit `enroll_new_thing` with no constant to enumerate it. The call
+    sites (and the one gate whose verdict the enroll call forwards) are therefore read for
+    literals too. Asserted on synthetic source: the real src/ passes constants only.
     """
     tree = ast.parse(
         "async def f():\n"
@@ -738,14 +693,9 @@ def test_a_literal_reject_reason_still_becomes_a_label_needing_a_rule():
 def test_every_reject_reason_is_alerted_on_or_explicitly_excused():
     """Enumerate the reason labels FROM EVERY WRITER in src/ and require a rule for each.
 
-    Two rounds of the same bug live behind this test. First the needle list was written by
-    hand and `ENROLL_SECRET_CONFLICT` slipped through it. Then the list was derived — but
-    only from `src/ext/protocol.py`, so `cors_preflight`, written in src/api/cors.py, was
-    just as invisible: derived list, hand-picked source. The source is now every
-    `auth_rejections.incr()` call under src/, so a label added in ANY module reddens this
-    unless it gets a rule or a line in `_REASONS_WITHOUT_A_RULE` — which forces the "does
-    this deserve an alert?" decision to be made and written down rather than defaulted to
-    no.
+    The source is every `auth_rejections.incr()` call under src/, so a label added in ANY
+    module fails this unless it gets a rule or a line in `_REASONS_WITHOUT_A_RULE`, which
+    forces the "does this deserve an alert?" decision to be made and written down.
     """
     exprs = " ".join(r["expr"] for r in _rules())
     labels = _reason_labels()
@@ -763,13 +713,12 @@ def test_every_reject_reason_is_alerted_on_or_explicitly_excused():
 
 
 def test_the_label_scan_sees_writers_outside_the_protocol_module():
-    """The scan must cover the modules the old protocol-only source could not see.
+    """The scan must cover modules outside src/ext/protocol.py.
 
-    Asserted directly, because "the source is now every writer" is the whole fix and it
-    would degrade silently: if the walk were narrowed back to src/ext, or the attribute
-    match broke, every test above would still pass on the protocol labels alone. These
-    three labels are born in three different packages and none of them exists in
-    src/ext/protocol.py.
+    Asserted directly because it would degrade silently: if the walk were narrowed to
+    src/ext, or the attribute match broke, every test above would still pass on the
+    protocol labels alone. These three labels are born in three different packages and
+    none of them exists in src/ext/protocol.py.
     """
     labels = _reason_labels()
     assert {"cors_preflight", "admin_bad_token", "mcp_token"} <= labels
@@ -784,10 +733,9 @@ def test_id_taken_rule_fires_on_a_single_occurrence():
     `id_taken` means the window was open, the code was right, and the peer asked for the id
     of a LIVE instance. Two readings, both worth one page: the operator named a new browser
     after an existing one (that browser is now stuck un-enrolled), or somebody aimed at an
-    existing identity. Neither is background noise — enrolments are rare and deliberate —
-    and since the approval step went away there is no pending list in /admin where a
-    refused attempt could be seen instead. Reddens if the rule is given a brute-force-style
-    threshold that would sit silent through a single collision."""
+    existing identity. Enrolments are rare and deliberate, and there is no pending list in
+    /admin where a refused attempt could be seen instead. Fails if the rule is given a
+    brute-force-style threshold that would sit silent through a single collision."""
     rule = next(r for r in _rules() if r["alert"] == "curator-enroll-id-taken")
     assert 'curator_auth_rejections_total{reason="enroll_id_taken"}' in rule["expr"]
     assert "increase(" in rule["expr"]
@@ -797,24 +745,21 @@ def test_id_taken_rule_fires_on_a_single_occurrence():
 def test_cors_preflight_rejections_have_a_rule():
     """The §12 «бесшумный отказ» must be alertable, not merely counted.
 
-    The rule's CAUSE narrowed when the origin allow-list was retired, but the failure it
-    reports did not go away. `allow_origins=["*"]` removes the origin ground for a refusal;
-    Starlette's other two — a requested METHOD outside `_ALLOW_METHODS`, a requested HEADER
-    outside `_ALLOW_HEADERS` — still 400, and they fail in exactly the same silent shape:
-    the websocket stays up, the instance stays green, and only the startpage's fetch dies,
-    so the newtab re-renders a cache that never refreshes. `tests/test_cors.py` pins that
-    both branches are reachable and counted.
+    `allow_origins=["*"]` removes the origin ground for a refusal; Starlette's other two (a
+    requested METHOD outside `_ALLOW_METHODS`, a requested HEADER outside
+    `_ALLOW_HEADERS`) still 400, silently: the websocket stays up, the instance stays
+    green, and only the startpage's fetch dies, so the newtab re-renders a cache that never
+    refreshes. `tests/test_cors.py` pins that both branches are reachable and counted.
 
-    Redden: delete the rule and the counter becomes a series nothing ever alerts on.
+    Fails if the rule is deleted: the counter becomes a series nothing alerts on.
     """
     rule = next(r for r in _rules() if r["alert"] == "curator-cors-preflight-rejected")
     assert 'curator_auth_rejections_total{reason="cors_preflight"}' in rule["expr"]
     # increase() over a window, so a healthy install's ABSENT series stays silent and one
     # historical rejection cannot page forever.
     assert "increase(" in rule["expr"]
-    # The summary must name what an operator can actually act on. It must NOT still send
-    # them to EXT_ALLOWED_ORIGINS — that variable no longer exists, and a summary naming it
-    # is worse than none: it is a confident wrong lead.
+    # The summary must name what an operator can act on, not EXT_ALLOWED_ORIGINS, which
+    # does not exist.
     summary = rule["annotations"]["summary"]
     assert "EXT_ALLOWED_ORIGINS" not in summary
     assert "method" in summary and "header" in summary

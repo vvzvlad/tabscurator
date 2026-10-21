@@ -1,15 +1,12 @@
 """CLI for the instance generator (§13): ``generate`` and ``bundle``.
 
-Under enrollment (§7/§13, issue #35) the extension build is UNIVERSAL: ``bundle``
-produces the ONE bundle the whole fleet loads, and ``generate`` only wraps that shared
-bundle in a per-instance ``.app`` + empty profile. Neither bakes in a service address or
-a secret — both are entered per profile through the enrollment settings UI — so
-``generate`` needs NO token and NO ``instance.json`` (both are gone).
+The extension build is universal: ``bundle`` produces the ONE bundle the whole fleet
+loads, and ``generate`` only wraps that shared bundle in a per-instance ``.app`` + empty
+profile. Neither bakes in a service address or a secret; both are entered per profile
+through the enrollment settings UI.
 
-There is no signing key and no ``--key-file`` either. The key existed only to PIN the
-``chrome-extension://`` id so one origin could be listed in ``EXT_ALLOWED_ORIGINS``; that
-allow-list is gone (``src/api/cors.py`` carries the argument), so nothing reads the id and
-letting Chromium derive it from the load path is fine.
+There is no signing key: nothing reads the ``chrome-extension://`` id (see
+``src/api/cors.py``), so Chromium derives it from the load path.
 """
 
 from __future__ import annotations
@@ -80,17 +77,12 @@ def build_stamp(extension_dir: str | Path) -> tuple[str, str, str] | None:
     particular is the only thing that tells a build from a modified tree apart from the
     committed code.
 
-    A build must NEVER fail over this. No git on PATH, not a git repo, an empty or broken
-    repo, a shallow clone, a manifest that is not a JSON object, a git that hangs — every
-    one of them returns ``None`` (the caller then copies the manifest verbatim, exactly as
-    before the stamp existed) with a note on stderr so the degrade is visible rather than
-    silent.
-
-    That fallback is not free, and the cost lands where the operator is told to look: an
-    unstamped bundle shows the base literal on the extension card ("Tabs Curator 0.1.0"),
-    which is indistinguishable from an older build that did not reload — the exact question
-    the stamp exists to answer. The stderr note is the ONLY signal that this happened. The
-    verbatim copy is kept anyway, deliberately: a build must not fail over its own identity.
+    A build must never fail over this. No git on PATH, not a git repo, an empty or broken
+    repo, a shallow clone, a manifest that is not a JSON object, a git that hangs: each
+    returns ``None`` (the caller then copies the manifest verbatim) with a note on stderr.
+    An unstamped bundle shows the base literal on the extension card ("Tabs Curator
+    0.1.0"), indistinguishable from an older build that did not reload, so the stderr note
+    is the only signal.
 
     git runs against the repo the SOURCE ``extension/`` lives in (``git -C``), not the
     process CWD: ``make dev-bundle`` may be invoked from anywhere.
@@ -233,14 +225,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
         print("                   state is NOT copied — they start logged-out "
               "(--no-sync-extensions to skip)")
         if not sync_extensions.is_dir():
-            # NOT an error: a machine with no such profile is a legitimate state, and the
-            # launcher re-checks the path at every launch, so it starts working the moment
-            # that directory appears. But the degrade is otherwise TOTALLY silent — the
-            # launcher's `[ -d "$MAIN" ]` guard skips the whole sync and neither it nor the
-            # browser says a word, so every synced extension is simply absent. Sync is on
-            # by DEFAULT and the default path comes from the generating user's `~`, so a
-            # .app generated under `sudo`, or copied to another Mac, lands here. Same
-            # degrade-with-a-note pattern as `build_stamp` above.
+            # Not an error: the launcher re-checks the path at every launch, so sync starts
+            # working once the directory appears. The note is needed because the launcher's
+            # `[ -d "$MAIN" ]` guard otherwise skips the sync silently. The default path
+            # comes from the generating user's `~`, so a .app generated under `sudo` or
+            # copied to another Mac lands here.
             print(
                 f"note: --sync-extensions {sync_extensions} does not exist or is not a "
                 "directory — this instance will launch with the curator bundle ALONE, "
@@ -271,10 +260,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
 def cmd_bundle(args: argparse.Namespace) -> int:
     """Build the UNIVERSAL extension bundle (§9) — a copy plus the build stamp.
 
-    Like ``generate`` this needs NO token, NO service URL and NO instanceId: with
-    enrollment (§7, issue #35) the build is universal — serviceUrl and the per-install
-    secret are entered per profile, not baked in. It also needs no signing key: the
-    manifest carries no ``key`` and no ``<host>``. NO ``instance.json`` is written.
+    Like ``generate`` this needs no token, service URL, instanceId or signing key: the
+    build is universal, serviceUrl and the per-install secret are entered per profile.
+    No ``instance.json`` is written.
 
     The one thing the copy rewrites is the manifest's build IDENTITY — ``version``, and
     nothing else (:func:`build_stamp`) — so the extension card in brave://extensions says
@@ -282,7 +270,7 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     ``make dev-bundle`` actually took. That is not configuration: two bundles differing
     only in the stamp behave identically, so any two runs are still byte-identical
     everywhere else and off the same commit differ only in ``version``'s trailing build
-    minute (acc 16). If the stamp cannot be computed the manifest is copied verbatim and
+    minute. If the stamp cannot be computed the manifest is copied verbatim and
     the build still succeeds.
 
     An existing ``--out`` is refused unless ``--force``, which rebuilds THAT SAME PATH via
@@ -363,20 +351,14 @@ def _human_bytes(count: int) -> str:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-# The paragraph every run ends with — the things that are not reversible by an undo and
-# must therefore be stated before the operator discovers them.
+# The paragraph every run ends with: the consequences an undo cannot reverse.
 #
-# The DIVERGENCE claim is deliberately split in two, because the earlier text asserted
-# both halves as one fact ("logging out here does not log the others out"). The LOCAL half
-# is certain: a LevelDB has one writer, the two profiles hold two independent copies, and a
-# vault entry added in one is invisible to the other. The SERVER half is not the same
-# claim. The Bitwarden storage carries an `appId` — the device identifier the server binds
-# a device and its refresh token to — and it was CONFIRMED present in the owner's real
-# `Local Extension Settings/nngceckbapebfimnlniiiahkandclblb` before this text was written,
-# so after the copy both profiles present the SAME device identity. What that does to a
-# "log out" / "deauthorize sessions" / device-approval action was NOT tested (it would take
-# a live account), so the consequence is named as unverified rather than asserted either
-# way. Do not re-collapse these two into one sentence.
+# The divergence claim has two halves with different certainty. Locally the two profiles
+# hold independent LevelDB copies, so a vault entry added in one is invisible to the
+# other. On the server side the Bitwarden storage carries an `appId` (the device id the
+# server binds a refresh token to), so both profiles present the same device identity;
+# what that does to "log out" / "deauthorize sessions" is untested and stated as
+# unverified. Keep the two halves separate.
 _COPY_TERMS = (
     "Every id listed above is REPLACED WHOLE. What this instance had stored for that "
     "extension — its\nown wallet, its own logged-in vault, its own settings — is DELETED, "
@@ -408,15 +390,9 @@ _COPY_TERMS = (
 def _print_plan_rows(rows, *, done: bool = False) -> None:
     """The `<id>  <size>  Local+Sync  replaces …` table, shared by dry run and real run.
 
-    THE LAST COLUMN IS THE ONE THAT WAS MISSING. The table used to size only what ARRIVES,
-    while the destination is not empty: on the owner's real `infra` instance those same 21
-    ids already hold 95.9 MB of that instance's OWN state (measured), including a 19.4 MB
-    MetaMask seed vault and a 7.3 MB Bitwarden vault, and every byte of it is deleted by
-    the run. "Overwrites" in a prose paragraph is not that number. So each row says what it
-    destroys — the figure grows every time the instance is used — and a row
-    that destroys a wallet or a vault says it in a line of its own — the difference between
-    "the instance gets my main wallet" and "the instance's own wallet is deleted" is
-    exactly the decision being taken here.
+    The last column sizes what the run deletes: the destination's own state for those ids
+    (a used instance can hold tens of MB, including wallet and password vaults). A row that
+    destroys a wallet or a vault says so in a line of its own.
 
     Written in the present tense for a plan and the past tense for a finished run (*done*),
     because "will be deleted" and "has been deleted" are not the same message to read.
@@ -461,9 +437,8 @@ def _print_layer_b_note(note: str | None) -> None:
     The guard has two layers: (a) the source must really have the extension installed
     unpacked, (b) the id THIS instance loads unpacked is excluded by derivation from its
     launcher. Layer (b) needs the launcher; without one it yields no ids, excludes nothing
-    and the run proceeds on layer (a) alone. That degradation was previously invisible —
-    the output looked identical to a healthy run. Printed now, so a weaker guard is READ
-    rather than inferred from the phrasing of an exclusion reason.
+    and the run proceeds on layer (a) alone, which would otherwise look identical to a
+    healthy run.
     """
     if note is None:
         return
@@ -479,10 +454,7 @@ def _print_layer_b_note(note: str | None) -> None:
 def _cmd_copy_state_dry_run(args: argparse.Namespace, only: list[str] | None) -> int:
     """List what a real run WOULD copy and what it would skip, touching nothing.
 
-    This exists because the warnings below used to print only AFTER ~130 MB of encrypted
-    vault had already been written into a second profile — i.e. the operator learned what
-    the command does at the one moment he could no longer decide not to. A dry run answers
-    "which ids, how big, what is excluded and why" first.
+    Answers "which ids, how big, what is excluded and why" before anything is written.
 
     It deliberately does NOT refuse on a running browser or on a full disk: both are the
     real run's refusals, and a dry run that dies on them cannot do its job (Brave is

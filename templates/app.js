@@ -1,14 +1,12 @@
 // Curator admin console logic. Served from /admin/app.js under script-src 'self' (there is
 // NO inline script). It renders the /admin JSON API through same-origin fetch.
 //
-// There is no pending-requests section anymore. Enrolment is one step (§6): a browser that
-// submits the registration code enrols itself under the id typed in its own settings, so
-// there is nothing here to approve and no list of waiting rows. A REFUSED attempt is
-// therefore not visible here either — it is reported in that browser's settings and counted
-// in /metrics (`curator-enroll-id-taken` alerts on the collision case). That is the accepted
-// cost of dropping the second step.
+// Enrolment is one step (§6): a browser that submits the registration code enrols itself
+// under the id typed in its own settings, so there is nothing here to approve. A REFUSED
+// attempt is not visible here — it is reported in that browser's settings and counted in
+// /metrics (`curator-enroll-id-taken` alerts on the collision case).
 //
-// SECURITY (issue #36 acc 6): every value rendered here is written with element.textContent
+// SECURITY: every value rendered here is written with element.textContent
 // — this file assigns raw markup to no element — so a value like `<img src=x onerror=…>`
 // renders as literal text, never as markup. That still matters for the id column: an id is
 // bounded to [A-Za-z0-9._-] server-side, but the rule is enforced there, not here.
@@ -75,22 +73,17 @@ function clearSlot(node) {
 
 // --- fetch wrappers (same-origin, cookie-authenticated) ----------------------
 // credentials:'same-origin' sends the session cookie; the browser adds Origin +
-// Sec-Fetch-Site on mutating requests, which the server's CSRF gate checks (acc 3).
+// Sec-Fetch-Site on mutating requests, which the server's CSRF gate checks.
 // Builds the Error a failed response is reported with — used by BOTH wrappers below, so a
-// read (apiGet) shows the operator the same words a write (apiSend) does. Both render*
-// calls go through apiGet, so leaving it on a bare status meant a degraded
-// service printed "/admin/instances -> 503" and threw away the sentence the server had
-// already written.
+// read (apiGet) shows the operator the same words a write (apiSend) does.
 //
 // The Error carries `.status`: a caller that must react to a SPECIFIC status (the 409 the
 // MAIN-revoke guard answers with) cannot parse it back out of the message.
 //
 // The error TEXT is read from both shapes, and that is not a nicety. `_http_exception`
 // (src/app.py) renders a dict `detail` as JSON and every OTHER `detail` — i.e. nearly all
-// of them — as plain text. Reading only `res.json().error` meant every carefully worded
-// string detail was swallowed by the failed parse and the operator was shown a bare
-// status code. The MAIN-revoke 409 spells out what revoking MAIN does and does not do; a
-// lone "-> 409" tells the operator none of that.
+// of them — as plain text. Reading only `res.json().error` would swallow every string
+// detail (e.g. the MAIN-revoke 409's explanation) and show a bare status code.
 const ERROR_DETAIL_MAX = 300; // one-line error box: enough for a sentence, not a page
 
 async function responseError(method, path, res) {

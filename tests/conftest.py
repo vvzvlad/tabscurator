@@ -18,11 +18,9 @@ METRICS_TOKEN = "test-metrics-token"
 ADMIN_TOKEN = "test-admin-token"
 
 # --- THE settings surface for tests ------------------------------------------
-# Every test that builds an app used to hand-roll its own ``SimpleNamespace``. Nine of
-# them had drifted apart, and the gaps were not cosmetic: a fixture missing
-# ``lease_ttl_ms`` turned a background curator pass — which the TestClient's real
-# lifespan starts — into a bare ``AttributeError`` inside an unrelated test, five
-# minutes after it began. One place to add a field is the point.
+# One shared settings object: a field missing from a hand-rolled fixture surfaces as an
+# ``AttributeError`` inside the background curator pass the TestClient's real lifespan
+# starts, in an unrelated test.
 #
 # Mirrors ``src.settings.Settings`` field for field (the app reads attributes off this
 # object, so a missing one is an AttributeError at the worst possible moment). When
@@ -107,18 +105,18 @@ def settings_factory():
     return make_settings
 
 
-# --- secret-based /ext hello helpers (enrollment, issue #35) -----------------
-# Under enrollment a hello authenticates by a per-install SECRET (option A): the client
+# --- secret-based /ext hello helpers (enrollment) ----------------------------
+# Under enrollment a hello authenticates by a per-install SECRET: the client
 # sends the RAW secret over TLS, the server hashes it (sha256) and resolves that to an
 # ACTIVE instances row, taking the server-assigned id from that row. A test that wants to
 # drive the hello path must therefore first have an approved (active) row whose stored
-# ``secret_hash`` is sha256(raw) — the thing Task E's operator approval creates — and then
+# ``secret_hash`` is sha256(raw) — what an enrolment creates — and then
 # present the RAW secret. These helpers make that a one-liner so every /ext test converges
 # on the same shape instead of hand-rolling INSERTs.
 
 
 def admin_headers() -> dict:
-    """Authorization for an ADMIN_TOKEN caller on ``/api/*`` and ``/mcp`` (issue #35 §4).
+    """Authorization for an ADMIN_TOKEN caller on ``/api/*`` and ``/mcp`` (§4).
 
     The human/agent credential: opens every ``/api/*`` route of either caller kind, and
     is the DB-free branch of :func:`src.api.guards.require_api_caller`.
@@ -127,8 +125,8 @@ def admin_headers() -> dict:
 
 
 def instance_headers(raw_secret: str) -> dict:
-    """Authorization for an INSTANCE caller on ``/api/*`` — its RAW secret (issue #35 §4,
-    option A), the SAME credential the client sends on /ext hello; the server hashes it and
+    """Authorization for an INSTANCE caller on ``/api/*`` — its RAW secret (§4), the SAME
+    credential the client sends on /ext hello; the server hashes it and
     matches the stored sha256. Pair with :func:`approve_instance` to have an active row the
     secret resolves to."""
     return {"Authorization": f"Bearer {raw_secret}"}
@@ -172,14 +170,9 @@ def approve_instance(db_path, instance_id, *, status="active", secret_hash=None)
 
 
 # --- bounded socket waits ----------------------------------------------------
-# TestClient's ``receive_json`` blocks FOREVER. A frame that never arrives therefore
-# turned a test into a multi-minute hang that read as "the suite is slow" instead of a
-# red test — and, once the hang outlived ``PASS_INTERVAL_MIN``, the app's real periodic
-# curator driver woke up INSIDE the test and ran a live pass against it. Every wait for a
-# frame goes through this helper so a missing frame fails fast and says so.
-#
-# Lives HERE, not copied per file, for the same reason ``make_settings`` does: seven
-# verbatim copies is the drift this module exists to stop.
+# TestClient's ``receive_json`` blocks FOREVER, and a hang past ``PASS_INTERVAL_MIN``
+# lets the app's real periodic curator driver run a live pass inside the test. Every wait
+# for a frame goes through this helper so a missing frame fails fast and says so.
 _RECV_TIMEOUT_S = 5.0
 
 

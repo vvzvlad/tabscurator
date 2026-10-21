@@ -1,10 +1,10 @@
-"""``/admin`` HTML console — the first HTML surface of the service (issue #36).
+"""``/admin`` HTML console.
 
-This is the presentation layer over the #35 ``/admin/*`` JSON API. It serves, via EXPLICIT
+This is the presentation layer over the ``/admin/*`` JSON API. It serves, via EXPLICIT
 handlers (never ``StaticFiles`` — that would not let us set the CSP header), the console
 page, the login form, and their ``.js`` / ``.css`` assets, plus the cookie-session
-login/logout endpoints. The page renders pending enroll requests, instances and the
-enrollment window entirely through SAME-ORIGIN ``fetch`` calls against the JSON API, so no
+login/logout endpoints. The page renders instances and the enrollment window entirely
+through SAME-ORIGIN ``fetch`` calls against the JSON API, so no
 data is templated into the HTML — the assets are static and contain NO secrets, hence they
 are served WITHOUT the auth guard.
 
@@ -18,7 +18,7 @@ Security posture:
   'none'`` with ``script-src 'self'`` — so there is NO inline ``<script>``; the page logic
   lives in the separately-served ``/admin/app.js``. This is why ``StaticFiles`` is unusable
   here: it cannot attach the policy.
-* **Session cookie = a random id, never the ADMIN_TOKEN** (see :mod:`src.api.admin_session`).
+* **Session cookie = a signed expiry, never the ADMIN_TOKEN** (see :mod:`src.api.admin_session`).
   ``HttpOnly`` + ``Secure`` (UNCONDITIONAL — TLS terminates at Traefik, so the app sees
   ``http`` and deriving ``Secure`` from the request scheme would silently drop it in prod) +
   ``SameSite=Strict`` + ``Path=/admin``.
@@ -56,7 +56,7 @@ from src.api.guards import (
 # hijacks; `img-src 'self'` bars remote pixels. `frame-ancestors 'none'` forbids ANY site
 # from framing the console — it does NOT inherit from default-src, so it must be stated
 # explicitly; without it a same-site Traefik neighbor could iframe the authenticated console
-# and clickjack the operator into same-origin (thus CSRF-passing) Approve/Revoke fetches.
+# and clickjack the operator into same-origin (thus CSRF-passing) revoke fetches.
 # One string, applied identically everywhere.
 _CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -78,24 +78,17 @@ class AdminSecurityHeadersMiddleware:
     """Stamp ``X-Content-Type-Options: nosniff`` and ``Cache-Control: no-store`` on EVERY
     ``/admin`` response.
 
-    Two cross-cutting headers covering both the HTML/asset responses and the #35 JSON API
+    Two cross-cutting headers covering both the HTML/asset responses and the JSON API
     responses. Implemented as a pure-ASGI middleware so it adds ONLY headers and never
-    touches the #35 JSON bodies or status codes. Frame defenses (CSP ``frame-ancestors`` +
+    touches the JSON bodies or status codes. Frame defenses (CSP ``frame-ancestors`` +
     ``X-Frame-Options``) stay on the HTML/asset responses themselves, where framing is the
     threat.
 
     * ``nosniff`` — a browser MIME-sniffing a JSON body into active HTML must not be
-      possible. The bodies carry no free-text client input anymore (the pending list that
-      served ``suggested_title`` / ``origin`` verbatim is gone, and an instance id is
-      charset-bounded before the row exists), but the header stays: it is what keeps the
-      NEXT field from being the hole, and it costs nothing.
-    * ``no-store`` — ``/admin`` is entirely secrets: ``GET /admin/enroll/window`` returns
-      the LIVE window code, which is now the WHOLE permission to enrol, and the console
-      page is only meaningful to an authenticated operator. None of it carried any cache
-      directive, so the default heuristics let a browser (or any intermediary) write the
-      live code to the disk cache, where it outlives both the window and the session.
-      ``no-store`` is the only directive that forbids writing it down at all —
-      ``no-cache`` still permits a stored copy.
+      possible, whatever field a body carries.
+    * ``no-store`` — ``GET /admin/enroll/window`` returns the LIVE window code, the whole
+      permission to enrol; without a directive a browser or intermediary may write it to
+      disk cache. ``no-cache`` would still permit a stored copy.
     """
 
     def __init__(self, app):
@@ -156,17 +149,11 @@ _REVISION_PLACEHOLDER = b"__BUILD_REVISION__"
 def _console_html(revision: str) -> bytes:
     """``templates/admin.html`` with the build revision substituted in.
 
-    Server-side substitution rather than a ``fetch`` from ``app.js``: it costs the page no
-    request at all, and — the actual point — it puts the revision on screen even when the
-    JSON API behind this console is refusing every call. A console that can only tell you
-    which code it runs while that code is working is useless for the one question it is
-    there to answer.
+    Server-side substitution rather than a ``fetch`` from ``app.js``, so the revision is on
+    screen even when the JSON API behind this console is refusing every call.
 
-    ``html.escape`` because the value reaches here from an environment variable: it is OUR
-    build stamping it (Dockerfile ``ARG``/``ENV``), so this is not a live threat, but a
-    value that lands inside an element must be escaped where it is interpolated — not
-    somewhere up the chain where the next caller will forget. Cached (``maxsize=1``): the
-    revision never changes within a process, so this runs once per start.
+    ``html.escape`` because the value comes from an environment variable and lands inside
+    an element. Cached (``maxsize=1``): the revision never changes within a process.
     """
     escaped = html.escape(revision, quote=False).encode("utf-8")
     return _asset_bytes("admin.html").replace(_REVISION_PLACEHOLDER, escaped)
@@ -207,18 +194,10 @@ async def admin_page(request: Request) -> Response:
     ``require_operational`` — the console must render (reads) even in degraded mode (acc 8).
     The HTML itself holds no data: it fetches the JSON API on load.
 
-    **An unauthenticated hit is redirected to the login form, not answered 401** (acc 1,
-    amended). The gate itself is untouched — the console body is still served ONLY to an
-    authenticated caller — but the REFUSAL is presented differently on this one route,
-    because this is the only ``/admin`` surface a human reaches by typing an address. The
-    401 was correct and useless: it put the bare text ``admin authentication required`` in
-    front of an operator whose only mistake was not having a cookie yet, while the login
-    form that fixes it sat one public URL away, reachable only from ``app.js`` — i.e. only
-    for a console that had ALREADY loaded. Two surfaces, two right answers: a program gets
-    a status it can branch on, a person gets the place to type the password.
-
-    The redirect is deliberately narrow, because "redirect instead of 401" is a footgun
-    anywhere else:
+    **An unauthenticated hit is redirected to the login form, not answered 401** (acc 1).
+    The console body is still served ONLY to an authenticated caller; only the refusal
+    differs, because this is the only ``/admin`` surface a human reaches by typing an
+    address. The redirect is deliberately narrow:
 
     * **HTML route only.** Every ``/admin/*`` JSON route keeps its flat 401 (:func:`
       require_admin` is unchanged). Redirecting an API call would swap a machine-readable
@@ -226,27 +205,16 @@ async def admin_page(request: Request) -> Response:
       does) would parse the login form as its payload.
     * **No-credential branch only.** A request that DID present ``Authorization: Bearer``
       and was rejected keeps the 401: that caller is curl/MCP/the agent, not a browser, and
-      it also keeps #35 acc 6 intact — an instance secret probing ``/admin`` still gets the
-      same 401 as an unknown token, with no page to distinguish them by.
+      an instance secret probing ``/admin`` gets the same 401 as an unknown token (acc 6).
     * **401 only.** A 503 (degraded resolve) or 403 (CSRF) propagates untouched; sending a
       DB outage to a login form would hide it.
 
-    ``303 See Other``: the request is a GET whose answer lives at a different URI. 303 says
-    exactly that and rewrites the method to GET on any future use, where 302 is the
-    historically ambiguous one and 307 preserves a method this GET-only route has no use
-    for; 301/308 would additionally invite a client to REMEMBER the substitution, which is
-    wrong the moment the operator logs in. (``Cache-Control: no-store`` from
-    :class:`AdminSecurityHeadersMiddleware` covers the redirect too.)
+    ``303 See Other``: a temporary, GET-only substitution that a client must not remember
+    (unlike 301/308). ``Cache-Control: no-store`` covers the redirect too.
 
-    The rejection is still counted: ``require_admin`` has already ticked
-    ``curator_auth_rejections_total{reason="admin_session"}`` by the time the exception
-    reaches here, and that stays. ``admin_session`` is the AMBIENT label by design — it
-    ticks once per browser that opens the console before logging in, carries no alert rule
-    (deploy/alerts.yml, and the exclusion is pinned in tests/test_deploy_alerts.py), and is
-    precisely the label the brute-force rule was split AWAY from. So a human walking into
-    the login form neither inflates ``admin_bad_token`` (only a WRONG token POSTed to
-    ``login_submit`` does) nor pages anyone — while the series itself stays alive, so
-    "the console is being hit without a session" remains observable.
+    The rejection is still counted by ``require_admin`` under ``admin_session``, the
+    ambient label with no alert rule (tests/test_deploy_alerts.py); only a wrong token
+    POSTed to ``login_submit`` counts as ``admin_bad_token``.
     """
     try:
         await require_admin(request)
@@ -311,19 +279,14 @@ async def login_submit(request: Request) -> Response:
     """``POST /admin/login`` — verify ADMIN_TOKEN → mint a cookie session (acc 2).
 
     The submitted token is compared CONSTANT-TIME against ``settings.admin_token``; on a
-    match a random session id is minted (NEVER the token) and set as the hardened cookie,
-    and the endpoint answers 200. A wrong/empty token is a flat 401. Not behind
+    match a signed session cookie is minted (NEVER the token) and set as the hardened
+    cookie, and the endpoint answers 200. A wrong/empty token is a flat 401. Not behind
     ``require_admin`` (this is how you AUTHENTICATE) and not behind ``require_operational``
-    (you may log in to read while degraded); it touches only the in-memory store.
+    (you may log in to read while degraded); it touches no DB.
 
-    A failure is counted under its OWN reason, :data:`ADMIN_BAD_TOKEN_REASON` — never the
-    generic ``admin_session`` that ``require_admin`` uses. The two events are nothing
-    alike: "someone opened /admin without a session" happens every time a browser hits the
-    console before logging in and is pure background noise, while "someone POSTed a WRONG
-    ADMIN_TOKEN" is a guess at the credential that opens /admin, /api/* and /mcp. Folded
-    into one label the second is unalertable — any threshold that survives the first is far
-    above a real brute force. Split, ``curator-admin-token-bruteforce`` can key on this
-    one (deploy/alerts.yml).
+    A failure is counted under its OWN reason, :data:`ADMIN_BAD_TOKEN_REASON`, not the
+    ambient ``admin_session`` that ticks on every console open before login, so
+    ``curator-admin-token-bruteforce`` (deploy/alerts.yml) can key on real guesses.
     """
     submitted = await _submitted_token(request)
     expected = request.app.state.settings.admin_token
@@ -342,9 +305,8 @@ async def login_submit(request: Request) -> Response:
 async def logout_submit(request: Request) -> Response:
     """``POST /admin/logout`` — end the presented session + clear the cookie (acc 5).
 
-    Deletes whatever session id the cookie carries from the in-memory store (idempotent)
-    and clears the cookie. It is not behind ``require_admin`` (harmless — it only drops the
-    presented id), but it IS a cookie-path MUTATING verb, so it takes the SAME same-origin
+    Clears the browser's cookie (a client-side logout, see :mod:`src.api.admin_session`).
+    It is not behind ``require_admin`` (harmless), but it IS a cookie-path MUTATING verb, so it takes the SAME same-origin
     CSRF gate: a same-site neighbor must not be able to force a logout (forced-logout DoS)
     with the ambient cookie.
     """

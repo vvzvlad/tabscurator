@@ -187,14 +187,11 @@ def test_a_revoked_or_pending_secret_cannot_arm_anything(tmp_path):
 
 # --- the stop gate is deliberately absent ------------------------------------
 def test_arming_works_while_the_curator_is_stopped(tmp_path):
-    """The emergency stop does NOT gate this verb, and that is a decision, not an oversight.
+    """The emergency stop does NOT gate this verb.
 
     §7's stop silences the curator's AUTOMATION; enrolling a browser is an operator action,
-    so it stays legal while stopped — which also means the startpage button keeps working
-    exactly when the human most needs a way in. Nothing else pins this: without the test,
-    adding ``require_not_paused`` here (an easy "for consistency" edit) would make the
-    button answer 423 while the stop is on, silently, and the module docstring would go
-    stale with no test reddening.
+    so it stays legal while stopped, and the startpage button keeps working when the human
+    most needs a way in. Fails if ``require_not_paused`` is added here.
     """
     app = create_app_for(tmp_path)
     db_path = str(tmp_path / "curator.db")
@@ -269,6 +266,6 @@ def test_two_arms_mint_different_codes(tmp_path):
         first = client.post("/api/enroll/window", headers=headers).json()["code"]
         second = client.post("/api/enroll/window", headers=headers).json()["code"]
         assert first != second
-        # The server holds the SECOND one — the first is no longer accepted anywhere.
+        # The server holds the SECOND one; the first is not accepted anywhere.
         state = client.get("/admin/enroll/window", headers=admin_headers()).json()
         assert state["code"] == second

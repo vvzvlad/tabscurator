@@ -5,11 +5,9 @@ ORDER — which is load-bearing for enrollment acceptance 2/3 — can be pinned 
 a websocket. Each branch and the ordering between branches is asserted.
 
 This file also owns the **mirror test** between this module's ``CMD_*`` / ``ERR_*``
-strings and the extension's ``extension/src/constants.js``. Both files carry a comment
-saying the two sides MUST agree, and a comment is the one thing that cannot enforce it:
-the halves live in different languages, ship in different artifacts and are only ever
-compared at runtime on a socket, where a drift shows up as a verb the extension answers
-with ``internal: unknown command`` — in production, on the owner's browser.
+strings and the extension's ``extension/src/constants.js``. The halves live in different
+languages, ship in different artifacts and are only compared at runtime on a socket,
+where a drift shows up as a verb the extension answers with ``internal: unknown command``.
 """
 
 import re
@@ -52,20 +50,16 @@ def test_hello_any_origin_is_accepted():
 
 
 def test_hello_no_token_field_consulted():
-    # There is no longer any token in the decision — a hello WITHOUT a token still passes.
+    # No token takes part in the decision: a hello WITHOUT a token still passes.
     msg = {"protocolVersion": 1}
     assert hello_reject_reason(msg, 1, "i1") is None
 
 
 # --- enroll_reject_reason: each branch + the load-bearing order --------------
-# The helper owns the CONFIG-shaped gates ONLY (protocol -> window -> code). Capacity used
-# to be a fifth parameter here; it moved into the write transaction, after which the only
-# caller pinned `has_capacity=True` and the branch became unreachable — a dead argument
-# whose docstring still promised capacity was checked before any row was written. The
-# pending list it capped is gone entirely now (enrolment is one step, §6). `None` from this
-# helper therefore means "the config gates passed", not "the request is accepted"; the
-# channel still has the structural check, the id charset check and the in-transaction
-# collision gate ahead of it.
+# The helper owns the CONFIG-shaped gates ONLY (protocol -> window -> code); capacity is
+# decided inside the write transaction. `None` from this helper therefore means "the
+# config gates passed", not "the request is accepted"; the channel still has the
+# structural check, the id charset check and the in-transaction collision gate ahead of it.
 def test_enroll_all_ok_returns_none():
     assert enroll_reject_reason({"protocolVersion": 1}, 1, True, True) is None
 
@@ -134,10 +128,9 @@ def test_instance_id_charset_and_length():
     """The id the browser proposes becomes the row's PRIMARY KEY and travels into URLs,
     metric labels and the console, so the accepted set is exactly [A-Za-z0-9._-]{1,64}.
 
-    This expression used to live in src/api/admin.py, applied to an id an OPERATOR typed
-    into the console. It moved here because the id now arrives on an UNAUTHENTICATED /ext
-    frame — the extension checks the same expression locally first, but that check is on
-    the peer's side of the wire and cannot be the gate.
+    The id arrives on an UNAUTHENTICATED /ext frame; the extension checks the same
+    expression locally first, but that check is on the peer's side of the wire and cannot
+    be the gate.
     """
     for good in ("main", "a", "A" * 64, "work-laptop", "Prox.2", "x_y-z.1"):
         assert instance_id_ok(good), good
@@ -159,11 +152,8 @@ def test_instance_id_charset_and_length():
 # --- the constants.js <-> protocol.py mirror (§6) ----------------------------
 # The wire strings are DUPLICATED by construction: the extension is JavaScript loaded
 # into a browser, the service is Python, and there is no shared artifact to import from.
-# Both files say so in a comment ("Mirrors the service-side CMD_* strings" /
-# "the two sides MUST agree"), which enforces nothing. Parsing the JS is the only way to
-# turn that promise into a test — and this is exactly the class of divergence nothing
-# else catches: adding a verb on one side alone type-checks, lints and passes every
-# other test, then answers `internal: unknown command` on the owner's browser.
+# Parsing the JS turns the "the two sides MUST agree" comments into a test: adding a verb
+# on one side alone passes every other check, then answers `internal: unknown command`.
 _CONSTANTS_JS = (
     Path(__file__).resolve().parent.parent / "extension" / "src" / "constants.js"
 )
@@ -176,11 +166,10 @@ _JS_WIRE_CONST_RE = re.compile(
 # `response` frame inside the command budget. Both describe a MISSING peer, so the
 # extension cannot possibly produce either and neither belongs in constants.js.
 #
-# ``ERR_TIMEOUT`` stays here even though this wave added waiting verbs (§11): a `wait_for`
-# whose condition never came true answers `ok:true, matched:false` — the browser answered,
-# the verdict is simply "no". Letting the extension ALSO say `timeout` would collapse that
-# definite negative into "state unknown, do not retry", which is the one thing `timeout`
-# must keep meaning.
+# ``ERR_TIMEOUT`` is service-only even for waiting verbs (§11): a `wait_for` whose
+# condition never came true answers `ok:true, matched:false` (the browser answered, the
+# verdict is "no"). Letting the extension ALSO say `timeout` would collapse that definite
+# negative into "state unknown, do not retry", which is what `timeout` must keep meaning.
 _SERVICE_ONLY_ERRORS = {"ERR_NO_CONNECTION", "ERR_TIMEOUT"}
 
 
@@ -222,7 +211,7 @@ def test_command_verbs_mirror_the_extension_exactly():
         "merge_windows", "execute_js", "move_tab", "get_text", "set_input", "wait_for",
         "scroll_until", "start_js", "poll_job", "set_focus_emulation",
         "start_ws_capture", "read_ws_frames", "stop_ws_capture",
-        # wake_tab (issue #68): reload a discarded tab and wait for it to load.
+        # wake_tab: reload a discarded tab and wait for it to load.
         "wake_tab",
         # screenshot: the picture twin of get_text — hybrid captureVisibleTab / Page.captureScreenshot.
         "screenshot",

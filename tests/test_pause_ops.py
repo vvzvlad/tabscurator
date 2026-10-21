@@ -230,7 +230,7 @@ class _StopRacer:
 
 
 async def test_stop_armed_between_step1_and_acquire_blocks_the_pass(tmp_path):
-    """BLOCKER: the stop check must live INSIDE the acquiring transaction.
+    """The stop check must live INSIDE the acquiring transaction.
 
     A stop pressed after the step-1 read bumps the epoch to E+1, but ``acquire`` bumps
     it straight to E+2 — the pass then owns the freshest epoch, every guarded write
@@ -269,17 +269,16 @@ async def test_fenced_pass_releases_its_own_slot_stop_does_not(tmp_path):
     ever letting two passes overlap.
 
     ``release`` is keyed on the OWNER (a fresh uuid per acquire), not on the epoch, so
-    a pass fenced by a stop can still hand its slot back when it finishes. Keying it on
-    the epoch too meant the fenced pass could never release: renewal stops,
-    ``pass_lease_until`` sits in the future for the whole ``LEASE_TTL_MS`` (10 min), and
-    a stop lifted after two minutes is answered with ``lease_unavailable`` until the TTL
-    burns out.
+    a pass fenced by a stop can still hand its slot back when it finishes. Keyed on the
+    epoch, the fenced pass could never release: renewal stops, ``pass_lease_until`` sits
+    in the future for the whole ``LEASE_TTL_MS`` (10 min), and a stop lifted after two
+    minutes would get ``lease_unavailable`` until the TTL burns out.
 
     The stop itself must NOT free the slot: ``run_phase_a`` / ``run_window_merge`` send
     their browser command BEFORE their first guarded write, so a slot freed at stop time
     lets the start's pass begin while the fenced one is still inside ``send_command``.
-    Reddens both ways — restore the epoch condition in ``release`` and the last acquire
-    fails; free the slot inside ``stop()`` and the mid-flight assertion fails.
+    Fails both ways: add the epoch condition to ``release`` and the last acquire fails;
+    free the slot inside ``stop()`` and the mid-flight assertion fails.
     """
     db = await _make_db(tmp_path)
     acquired, epoch = await db.write(lambda c: lease.acquire(c, "pass-1", 0, 600_000))

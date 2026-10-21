@@ -21,7 +21,7 @@ from src.api.state import kick_state_refresh
 from src.app import create_app
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -30,10 +30,9 @@ AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **over)
 
@@ -84,7 +83,7 @@ def _wait_until(fn, timeout=5.0, interval=0.01):
 
 
 def _connect_fresh(client, db_path, instance_id="i1", session="sess-1", tabs=None):
-    # Secret-based hello (issue #35): approve the instance (Task E) before it can hello.
+    # Secret-based hello: the instance must be enrolled before it can hello.
     approve_instance(db_path, instance_id)
     ws = client.websocket_connect("/ext").__enter__()
     ws.send_json(_hello(instance_id=instance_id, session=session))
@@ -124,13 +123,12 @@ def test_revoked_instance_and_its_tabs_leave_the_state_mirror(tmp_path):
     """``/api/state`` is the CURATED fleet, so a revoked instance leaves it — with its
     tabs.
 
-    The same status filter ``known_instance_ids`` and ``load_preview_input`` already apply
-    (issue #35 §6: "in both places or neither"), extended to the two read surfaces that
-    still lacked it. For the startpage a revoked instance is dead weight in every sense:
-    its socket is closed, a jump to its tabs can only fail, its mirror can never refresh
-    again, and the row would sit in the status strip reading "offline for N days" with no
-    way for the human to clear it — retired instances are administered in
-    ``/admin/instances``, which lists every status on purpose.
+    The same status filter ``known_instance_ids`` and ``load_preview_input`` apply ("in
+    both places or neither"), on the two read surfaces. For the startpage a revoked
+    instance is dead weight: its socket is closed, a jump to its tabs can only fail, its
+    mirror can never refresh again, and the row would sit in the status strip reading
+    "offline for N days" with no way for the human to clear it. Retired instances are
+    administered in ``/admin/instances``, which lists every status on purpose.
 
     The tabs go with it: nothing ever deletes a revoked instance's tabs (``apply_snapshot``
     is their only writer and it needs a live socket), so leaving them behind would render a
@@ -232,11 +230,10 @@ def test_state_returns_mirror_shape(tmp_path):
 def _stale_the_mirror(db_path, instance_id="i1"):
     """Age the mirror out by REWRITING ``snapshot_at``, not by waiting.
 
-    The old form asked for staleness with ``state_fresh_ms=1`` and let real time supply
-    the millisecond. It usually did — but the whole handshake→GET path can complete
-    inside one millisecond, and then ``_is_stale`` compares ``now - snapshot_at == 0``
-    against ``>= 1``, the kick correctly declines, and the test fails on timing rather
-    than on behaviour. Writing the timestamp makes "the mirror is old" a fact.
+    Asking for staleness with ``state_fresh_ms=1`` and letting real time supply the
+    millisecond is flaky: the whole handshake->GET path can complete inside one
+    millisecond, ``now - snapshot_at == 0`` fails ``>= 1``, and the kick correctly
+    declines. Writing the timestamp makes "the mirror is old" a fact.
     """
     conn = sqlite3.connect(db_path)
     try:
@@ -269,10 +266,10 @@ def test_state_kicks_background_refresh_when_stale(tmp_path):
 
 
 def test_state_does_not_await_a_snapshot_even_with_a_large_timeout(tmp_path):
-    """Regression (issue #44 acceptance d): ``list_tabs`` / ``list_instances`` now BLOCK on
-    a fresh snapshot (§6), but ``/api/state`` deliberately does NOT — its refresh stays a
-    detached background kick, because the startpage is newtab and a blocking fan-out would
-    move ``snapshot_at`` on every Cmd+T during a pass.
+    """``list_tabs`` / ``list_instances`` BLOCK on a fresh snapshot (§6), but
+    ``/api/state`` deliberately does NOT: its refresh stays a detached background kick,
+    because the startpage is newtab and a blocking fan-out would move ``snapshot_at`` on
+    every Cmd+T during a pass.
 
     Proven by construction, not luck: with a stale mirror and a 5 s snapshot timeout, a
     blocking implementation would await the answer (that we never send) for ~5 s. The
@@ -617,9 +614,9 @@ def test_state_pending_plan_degrades_to_null_on_a_malformed_latch(tmp_path):
 
 
 # --- the kick and the "do not clobber" guard, pinned DETERMINISTICALLY -------
-# These two reproduce, by construction rather than by timing luck, the interleaving that
-# used to make this file hang for minutes. No sleeps, no load, no retries: the state is
-# frozen at the exact instant that matters and asserted.
+# These two reproduce, by construction rather than by timing, the interleaving that can
+# hang the suite. No sleeps, no load, no retries: the state is frozen at the exact
+# instant that matters and asserted.
 def test_state_kick_respects_an_in_flight_pass_request_and_still_refreshes(tmp_path):
     """A pass is collecting snapshots when the newtab opens (§7/§10).
 
@@ -664,11 +661,11 @@ def test_state_kick_respects_an_in_flight_pass_request_and_still_refreshes(tmp_p
 
 
 def test_an_unlanded_handshake_leaves_the_slot_occupied_and_is_caught(tmp_path):
-    """WHY ``_connect_fresh`` now HARD-asserts that the initial snapshot landed.
+    """WHY ``_connect_fresh`` HARD-asserts that the initial snapshot landed.
 
     If it does not land, the request slot stays occupied; ``/api/state``'s kick then
     CORRECTLY skips the instance ("a refresh is already in flight") and no frame is ever
-    sent. A test waiting for that frame used to wait forever — long enough, past
+    sent. A test waiting for that frame would wait forever, long enough, past
     ``PASS_INTERVAL_MIN``, for the app's real curator driver to wake up inside it. The
     whole chain is reproduced here deterministically by answering with a foreign id,
     which §6 drops by design.
@@ -676,7 +673,7 @@ def test_an_unlanded_handshake_leaves_the_slot_occupied_and_is_caught(tmp_path):
     app = create_app(_settings(tmp_path, state_fresh_ms=3000, snapshot_timeout_ms=200))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
-        approve_instance(db_path, "i1")  # secret-hello needs an approved active row (#35)
+        approve_instance(db_path, "i1")  # secret-hello needs an enrolled active row
         ws = client.websocket_connect("/ext").__enter__()
         try:
             ws.send_json(_hello())

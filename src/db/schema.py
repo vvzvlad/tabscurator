@@ -179,12 +179,10 @@ _V1_STATEMENTS: list[str] = [
     "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)",
 ]
 
-# --- Version 2: enrollment (§1 of issue #35) --------------------------------
-# Enrollment replaces the former shared /ext token: an instance says hello with an
-# install_uuid + a per-install secret, lands in enroll_requests, and an operator
-# approves it into instances during a short enrollment window. This step only adds
-# the STORAGE (tables + columns + the guarding index) and migrates existing rows —
-# the /ext handshake, /admin endpoints and revocation are later tasks.
+# --- Version 2: enrollment storage -----------------------------------------
+# Per-install secrets: an instance says hello with an install_uuid + a per-install
+# secret. This step adds the tables, columns and the guarding index, and migrates
+# existing rows.
 #
 # Each ALTER TABLE / CREATE / UPDATE is ONE statement and its OWN list entry: the
 # runner executes them individually inside a single BEGIN IMMEDIATE transaction, so
@@ -237,48 +235,26 @@ _V2_STATEMENTS: list[str] = [
 ]
 
 # --- Version 3: enrollment without approval (§6) -----------------------------
-# The two-step enrollment is gone. The WINDOW is the permission: an enroll_request that
-# carries the right code into an open window creates the ACTIVE instance immediately,
-# under the id the human typed in the extension settings. So the whole pending-request
-# storage goes with it, and with it the client-proposed name:
+# The WINDOW is the permission: an enroll_request that carries the right code into an
+# open window creates the ACTIVE instance immediately, under the id the human typed in
+# the extension settings. Drops ``enroll_requests`` (nothing uses it) and
+# ``instances.title`` (the id IS the name).
 #
-# * ``enroll_requests`` — nothing writes or reads it anymore. The channel enrolls straight
-#   into ``instances``; there is no operator list to hold, no TTL to sweep, no capacity
-#   to cap. Dropping the TABLE (rather than leaving it orphaned) is what makes the
-#   simplification real: a leftover table is an invitation to wire the second step back.
-# * ``instances.title`` — the browser proposed a display name AND the operator separately
-#   assigned an id, with no rename anywhere in the product to justify the split. One name
-#   per system now: the id IS the name, and every surface that printed ``title`` prints
-#   the id.
-#
-# ``ALTER TABLE ... DROP COLUMN`` needs SQLite >= 3.35 (measured: 3.46.1 in the shipping
-# python:3.11-slim image, 3.53.3 on the dev machine) and refuses a column that is indexed
-# or referenced by a view/trigger — ``title`` is plain, so this is a single statement
-# rather than the twelve-column table rebuild the older recipe would need.
+# ``ALTER TABLE ... DROP COLUMN`` needs SQLite >= 3.35 (3.46.1 in python:3.11-slim) and
+# refuses an indexed or view/trigger-referenced column — ``title`` is plain.
 _V3_STATEMENTS: list[str] = [
     "DROP TABLE enroll_requests",
     "ALTER TABLE instances DROP COLUMN title",
 ]
 
 # --- Version 4: the capability report (§11/§12) ------------------------------
-# ``allow_execute_js`` has been reported in ``hello`` since v1, but it was the ONLY thing
-# an instance said about itself. An agent could not find out what a copy allows until a
-# verb failed mid-task, which is the expensive moment to learn it. Two more facts ride the
-# same hello -> instances -> list_instances path:
+# Two more facts ride the hello -> instances -> list_instances path:
 #
-# * ``allow_debugger`` — the second per-copy options checkbox, default OFF like its
-#   sibling. NO verb reads it as a gate yet; it is the switch a later screenshot/CDP path
-#   will read. It lands NOW because the report is the point: a capability that appears
-#   only with its first consumer forces every agent written before that day to discover
-#   the answer by failing. DEFAULT 0 — a column that defaulted to 1 would report every
-#   pre-migration instance as debugger-capable, which is the opposite of the truth.
-# * ``ext_version`` — which extension bundle is actually running (from
-#   ``chrome.runtime.getManifest().version``). The service and the extension update by
-#   DIFFERENT paths (the Dockerfile does not ship ``extension/``), so "new service + old
-#   extension" is a guaranteed state; without this nothing could tell an agent that the
-#   copy it is talking to predates a verb. NULLable: an instance that has not said hello
-#   since the upgrade genuinely has not told us, and "unknown" must not be spelled as a
-#   made-up version string.
+# * ``allow_debugger`` — a per-copy options checkbox, DEFAULT 0 (dropped again in v6).
+# * ``ext_version`` — which extension bundle is running
+#   (``chrome.runtime.getManifest().version``). The service and the extension update by
+#   DIFFERENT paths, so "new service + old extension" is a real state. NULLable: an
+#   instance that has not said hello since the upgrade has not told us.
 #
 # Each ALTER TABLE is its own statement (the runner executes them in order inside one
 # BEGIN IMMEDIATE), matching the v2 style.
@@ -303,31 +279,20 @@ _V5_STATEMENTS: list[str] = [
 ]
 
 # --- Version 6: the single JS & Debugger checkbox (§12) ----------------------
-# ``allow_debugger`` (added in v4) was the mirror of a SECOND per-copy options checkbox that
-# was meant to gate a future chrome.debugger path. That path arrives (wave 18, starting with
-# ``set_focus_emulation``), but the owner's decision is ONE checkbox for both surfaces: the
-# live ``allow_execute_js`` gate now covers execute_js AND the debugger path. That makes a
-# separate ``allow_debugger`` meaningless — nothing reads it, and keeping it would report a
-# capability the product no longer has. So the column goes.
+# ``allow_execute_js`` gates both execute_js and the chrome.debugger path, so the
+# ``allow_debugger`` column is unused and dropped. The extension-side key keeps the name
+# ``allowExecuteJs`` (renaming it would reset every installed copy's checkbox to OFF).
 #
-# The gate KEY on the extension side keeps its historical name ``allowExecuteJs`` on purpose
-# (renaming it would reset every installed copy's checkbox to OFF); only the dead mirror
-# column is dropped here.
-#
-# ``ALTER TABLE ... DROP COLUMN`` needs SQLite >= 3.35 (measured: 3.46.1 in the shipping
-# python:3.11-slim image, 3.53.3 on the dev machine) and refuses a column that is indexed or
-# referenced by a view/trigger — ``allow_debugger`` is a plain, unindexed column (like
-# ``title`` in v3), so from the migration's side this is a single ALTER statement, not a
-# hand-rolled table rebuild — even though SQLite may internally rewrite the table to run it.
+# ``allow_debugger`` is a plain, unindexed column, so a single ``DROP COLUMN`` works
+# (SQLite >= 3.35).
 _V6_STATEMENTS: list[str] = [
     "ALTER TABLE instances DROP COLUMN allow_debugger",
 ]
 
-# --- Version 7: open_tab's lease remembered per TAB (#72) -------------------
+# --- Version 7: open_tab's lease remembered per TAB --------------------------
 # ``open_tab {lease_ttl_s}`` writes an ``exemptions`` row keyed by URL; this table also
 # remembers WHICH tab got that lease, so ``navigate_tab`` can carry a live one to the new
-# url and a reaped leased tab reads ``tab_reaped``. It used to live in process memory, so
-# a service restart forgot it; here it survives one. ``leased_at`` is when open_tab took
+# url and a reaped leased tab reads ``tab_reaped``, across service restarts. ``leased_at`` is when open_tab took
 # the lease (a curator close before it belongs to an older tab with a reused id),
 # ``until`` the lease deadline. Pruned by retention on the ``actions`` horizon.
 _V7_STATEMENTS: list[str] = [

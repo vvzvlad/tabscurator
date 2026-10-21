@@ -58,7 +58,7 @@ async def test_write_commits_and_reader_sees_it(tmp_path):
 
 
 async def test_cancel_mid_write_does_not_leak_lock(tmp_path):
-    # The central measured invariant (§4, 2026-07-26): a transaction that lives
+    # The central measured invariant (§4): a transaction that lives
     # entirely inside one thread call plays out and releases its lock even when the
     # awaiting task is cancelled — unlike a tx stretched across `await`, which would
     # hold the lock until close(). Guards against a future refactor slipping an

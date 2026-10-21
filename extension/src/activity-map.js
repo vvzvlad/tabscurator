@@ -259,20 +259,9 @@ export function onRemoved(tabId) {
   });
 }
 
-// Curator open_tab seed (§5): the record is stamped from the command's seed ages
-// so the freshly opened copy inherits the source's age rather than looking new.
-// Wired by the command layer in the NEXT phase; the seed path lives here.
-// Batch form of seedCuratorTab: ONE runExclusive for the whole list.
-//
-// The bulk verbs (#49) send one frame per list, and the point of that is to stop
-// paying per-element costs. seedCuratorTab is the most expensive per-element call
-// there is on this side — runExclusive means loadMap() + saveMap() of the ENTIRE map
-// under the shared promise chain — so seeding N copies one at a time re-imports the
-// very cost the single frame was bought to remove: on a 200-tab map a 20-item bulk
-// relocate would pay 20 full map round-trips inside one CMD_TIMEOUT_MS budget.
-//
-// `entries` is [{tabId, seed}]; `now` is stamped once for the whole batch, which is
-// also more honest than N drifting timestamps for copies opened in one operation.
+// Batch form of seedCuratorTab (§5): the opened copies inherit the source's ages.
+// One runExclusive for the whole list, since each one loads and saves the entire map.
+// `entries` is [{tabId, seed}]; `now` is stamped once for the whole batch.
 export function seedCuratorTabs(entries, now) {
   return runExclusive((map) => {
     for (const { tabId, seed } of entries) {

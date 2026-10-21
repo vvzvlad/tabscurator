@@ -8,10 +8,10 @@
 //   closed   — seen before but not currently connected (browser closed)
 //   ok       — connected
 //
-// There is deliberately NO "stale" (mirror-freshness) state anymore (issue #62 item 1):
-// a connected instance reads "на связи" regardless of how old its last snapshot is. The
-// background single-flight refresh (src/api/state.py) keeps the mirror current on its
-// own, so surfacing mirror age here only produced flapping "зеркало устарело" chatter.
+// There is deliberately NO "stale" (mirror-freshness) state: a connected instance reads
+// "на связи" regardless of how old its last snapshot is. The background single-flight
+// refresh (src/api/state.py) keeps the mirror current, and surfacing mirror age only
+// produces flapping chatter.
 export function instanceStatus(inst, now) {
   if (!inst) return { state: "never", label: "никогда не подключался" };
   if (inst.reject_reason) {
@@ -26,7 +26,7 @@ export function instanceStatus(inst, now) {
   return { state: "ok", label: "на связи", at: inst.snapshot_at };
 }
 
-// The `resume_pending` latch has exactly ONE meaning now (§7 "Порог действий на
+// The `resume_pending` latch has exactly ONE meaning (§7 "Порог действий на
 // проход"): the last pass's plan exceeded the per-pass action threshold
 // (MAX_ACTIONS_PER_PASS) and waits for one confirming click. It is SELF-REFRESHING —
 // every pass recomputes the plan against the fresh mirror and rewrites the key, so

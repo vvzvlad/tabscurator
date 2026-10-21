@@ -2,8 +2,7 @@
 
 Pure synchronous ``fn(conn)`` bodies runnable from ``Database.read``. The endpoint
 returns this straight from the mirror IMMEDIATELY and (separately) kicks a
-background single-flight snapshot refresh — this module never does I/O or awaits
-(Фаза 2 contract). Every SELECT is static and parameter-free; the shape mirrors
+background single-flight snapshot refresh — this module never does I/O or awaits. Every SELECT is static and parameter-free; the shape mirrors
 §10's ``StateResponse`` exactly.
 """
 
@@ -40,19 +39,11 @@ _TAB_COLUMNS = (
 )
 
 
-# The curated fleet is the ACTIVE fleet (issue #35 §6: the status filter belongs in BOTH
-# read surfaces or neither — ``rules.access.known_instance_ids`` and
-# ``rules.preview.load_preview_input`` already carry it, and ``/metrics`` now does too).
-#
-# ``/api/state`` is the mirror the STARTPAGE renders, and a revoked instance is not part
-# of it in any sense the page can use: its socket is closed, a jump to its tabs can only
-# fail, its mirror can never refresh again, and the row would sit in the status strip
-# forever reading "offline for N days" with no way for the human to make it stop. The
-# alternative — ship the row with a ``status`` field and let the client hide it — was
-# rejected: it needs a client change to avoid exactly that phantom row, and it would leave
-# the same dead weight in the tab groups. Administration of retired instances lives in
-# ``/admin/instances``, which deliberately lists every status (and is where the operator
-# re-approves or inspects them).
+# The curated fleet is the ACTIVE fleet (§6), the same filter as
+# ``rules.access.known_instance_ids``, ``rules.preview.load_preview_input`` and
+# ``/metrics``. A revoked instance's socket is closed and its mirror never refreshes, so
+# the startpage would show it "offline" forever. Retired instances are listed in
+# ``/admin/instances``, which shows every status.
 _ACTIVE_ONLY = "WHERE status = 'active'"
 
 
@@ -83,7 +74,7 @@ def _read_tabs(
     window_id: int | None = None,
     url_contains: str | None = None,
 ) -> list[dict]:
-    """Read the tabs mirror (§10), optionally narrowed by the #46 MCP filters.
+    """Read the tabs mirror (§10), optionally narrowed by the MCP filters.
 
     ``_TAB_COLUMNS`` stays the canonical SQL selection (``fav_icon_url`` included) so
     ``build_state`` / ``GET /api/state`` are byte-identical — the MCP adapter drops the
@@ -143,7 +134,7 @@ def _read_tabs(
 
 
 def _read_windows(conn: sqlite3.Connection) -> list[dict]:
-    """One summary record per window (#46 ``list_windows``): ``instance_id``,
+    """One summary record per window (``list_windows``): ``instance_id``,
     ``window_id``, ``type``, ``state``, ``tab_count`` and a ``focused`` flag.
 
     Sources are exactly the three the tool advertises: the ``windows`` table, a COUNT
@@ -181,7 +172,7 @@ def _read_windows(conn: sqlite3.Connection) -> list[dict]:
 
 
 def _read_active_sessions(conn: sqlite3.Connection) -> dict[str, str | None]:
-    """``{instance_id: session_id}`` for every ACTIVE instance (#47 "session epoch").
+    """``{instance_id: session_id}`` for every ACTIVE instance ("session epoch").
 
     Kept OFF :func:`_read_instances` on purpose: the MCP freshness envelope stamps
     ``session_id`` next to each instance so an agent can echo it back as
@@ -202,8 +193,8 @@ def _read_capabilities(conn: sqlite3.Connection) -> dict[str, dict]:
     The §11 capability report: what a copy will ALLOW, as that copy itself declared it in
     its last ``hello``. An agent reads this BEFORE it calls, instead of discovering
     ``js_disabled`` — or a verb an older bundle has never heard of — halfway through a task.
-    ``allow_execute_js`` is now the SINGLE JS & Debugger gate (it gates execute_js AND the
-    chrome.debugger path); the former ``allow_debugger`` column is gone (migration v6).
+    ``allow_execute_js`` is the SINGLE JS & Debugger gate (it gates execute_js AND the
+    chrome.debugger path).
 
     A separate reader for the same reason as :func:`_read_active_sessions`: the §10
     ``StateResponse`` shape (:func:`_read_instances`) must stay byte-identical, so a field

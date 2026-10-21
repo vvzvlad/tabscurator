@@ -151,8 +151,8 @@ async def test_idempotency_horizon_outlives_an_extended_pause(tmp_path):
     (the ops compose, they do not settle).
 
     Simulates that directly: a batch claimed before a fortnight of extended pause, whose
-    retry lands 15 days later, must still be recognised. At the old 7-day horizon it is
-    not, and the retry double-applies.
+    retry lands 15 days later, must still be recognised. At a 7-day horizon it is not,
+    and the retry double-applies.
     """
     db = await _make_db(tmp_path)
     try:

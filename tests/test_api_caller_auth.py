@@ -1,4 +1,4 @@
-"""``require_api_caller`` — the per-caller ``/api/*`` auth model (issue #35 §4/§5).
+"""``require_api_caller``: the per-caller ``/api/*`` auth model.
 
 Two layers:
 
@@ -197,8 +197,8 @@ def test_db_error_makes_api_state_503_not_401(tmp_path):
 def test_focus_force_crosses_pause_only_for_instance_not_admin(tmp_path):
     """Acc 7: at an armed stop, ``POST /api/focus {force:true}`` is 423 for an ADMIN_TOKEN
     caller (an agent must not bypass §7 outside MCP) but crosses the gate for the instance
-    caller (the human) — it then fails on its own merits (no live socket → 502), which is
-    exactly the proof the STOP no longer decided."""
+    caller (the human); it then fails on its own merits (no live socket -> 502), which
+    proves the stop did not decide."""
     app = create_app(make_settings(tmp_path, pass_interval_min=100_000))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:

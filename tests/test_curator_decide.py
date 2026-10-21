@@ -159,13 +159,13 @@ def test_two_DIFFERENT_urls_to_same_target_both_open():
 def test_orphan_beats_a_broader_valid_rule_on_the_specificity_ladder():
     """The specificity ladder (§8) must run ONCE, across valid and orphaned rules alike.
 
-    ``*.alpha.example.lc -> prox`` is valid; the more specific ``www.alpha.example.lc -> ghost`` was
-    orphaned (its instance retired). Before the flag the ladder picks the longer pattern,
-    the home is unreachable, and the tab is DEFERRED — untouched. Asking the valid rules
-    first and only then the orphans runs the ladder twice: ``*.alpha.example.lc`` wins by
-    default and the tab is relocated into ``prox`` — a home the owner never chose for it,
-    triggered by retiring an unrelated instance. Reddens under that two-step lookup:
-    phase_a becomes [(20, 'prox')] and deferred is empty.
+    ``*.alpha.example.lc -> prox`` is valid; the more specific ``www.alpha.example.lc -> ghost`` is
+    orphaned (its instance retired). The ladder picks the longer pattern, the home is
+    unreachable, and the tab is DEFERRED, untouched. Asking the valid rules first and only
+    then the orphans would run the ladder twice: ``*.alpha.example.lc`` would win and the
+    tab would be relocated into ``prox``, a home the owner never chose, triggered by
+    retiring an unrelated instance. Fails under that two-step lookup: phase_a becomes
+    [(20, 'prox')] and deferred is empty.
     """
     rules = [
         _rule(1, "*.alpha.example.lc", "prox"),

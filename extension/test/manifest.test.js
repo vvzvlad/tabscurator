@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// The manifest is JSON; assert the enrollment host_permissions change (§7, issue #35).
+// The manifest is JSON; assert the enrollment host_permissions (§7).
 const manifest = JSON.parse(
   readFileSync(fileURLToPath(new URL("../manifest.json", import.meta.url)), "utf8"),
 );
@@ -11,8 +11,8 @@ const manifest = JSON.parse(
 // entry changes what Chrome asks every operator for on update ("Читать и изменять
 // закладки", "Читать историю просмотров", and for `debugger` a "Доступ ко всем данным
 // вкладок" / debugging warning), and a permission that quietly disappears takes a whole
-// feature down with it (the startpage's two side columns render empty, or the
-// chrome.debugger path can no longer attach, and nothing anywhere says why). Assert the
+// feature down with it (the startpage's side columns render empty, or the chrome.debugger
+// path cannot attach, and nothing anywhere says why). Assert the
 // EXACT set — a subset check would let both accidents through.
 describe("manifest permissions (§10 startpage columns)", () => {
   it("is exactly the documented set — nothing added, nothing dropped", () => {

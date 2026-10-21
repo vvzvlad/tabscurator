@@ -3,7 +3,7 @@
 §8 is the single canon of matcher semantics; the browser never duplicates this
 (that is why preview is server-side too — a second implementation "would lie on
 IDN and IPv6"). Everything here is deterministic and pure so it can be reused
-verbatim by the (later) curator pass and by preview.
+verbatim by the curator pass and by preview.
 
 Semantics, verbatim from §8:
 

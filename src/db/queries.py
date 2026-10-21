@@ -1,7 +1,7 @@
 """Synchronous ``fn(conn)`` bodies for ``Database.write`` used by the /ext channel.
 
 Every function here is a plain synchronous callable that runs INSIDE one
-``Database.write`` transaction (Фаза 2 contract: no ``await``, one BEGIN/COMMIT).
+``Database.write`` transaction (no ``await``, one BEGIN/COMMIT).
 They are kept out of ``channel.py`` so the exact SQL of the two load-bearing
 invariants — the epoch-guarded disconnect UPDATE and the hello upsert that reads
 its own new ``conn_epoch`` back in the same transaction — is in one place and
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 def sha256_hex(raw_secret: str) -> str:
     """sha256 of a RAW secret as lowercase hex — the ONE shared server-side hasher.
 
-    Credential model (issue #35, option A): the client sends its RAW secret over TLS;
+    Credential model: the client sends its RAW secret over TLS;
     the server hashes it HERE, both when storing it at enroll and when resolving it at
     every hello / ``/api`` Bearer. Only the sha256 is ever persisted (``secret_hash``
     columns), so a DB-only leak yields hashes, not usable credentials. Using the SAME
@@ -47,22 +47,15 @@ class RevokeResult:
     was_main: bool  # the target was the configured MAIN (a guarded revoke)
 
 
-# Revoke in ONE transaction (§5). session_id=NULL is REQUIRED: today mark_disconnected
-# does NOT clear it, so the mirror keeps treating a relocation as live forever
-# (mirror.load_mirror keeps a relocate live only while both endpoints' sessions still
-# match — a NULL session drops it out of live_relocations at once). The status='revoked'
-# itself is the retire INTENT the pass scans for.
+# Revoke in ONE transaction (§5). session_id=NULL is REQUIRED: mark_disconnected does
+# NOT clear it, and mirror.load_mirror keeps a relocate live only while both endpoints'
+# sessions still match — a NULL session drops it out of live_relocations at once. The
+# status='revoked' itself is the retire INTENT the pass scans for.
 #
-# connected/focused_window_id are cleared HERE as well, not left to the caller's
-# best-effort socket close: that close is a no-op when there is no registry entry
-# (``admin._close_live_socket`` returns early), so revoking an OFFLINE-but-stale
-# instance — the row was left ``connected=1`` by a process kill, which is exactly the
-# state a crash leaves behind — used to keep the flag set FOREVER. Nothing else ever
-# clears it: ``mark_disconnected`` is epoch-guarded and only ever runs from a socket
-# finalizer, and there is no socket. A revoked instance must never read as connected on
-# any surface (/metrics' half-open-socket rule, /api/state, the console), so the revoke
-# transaction owns the flag. A LIVE socket's own finalizer later runs the epoch-guarded
-# UPDATE against the same (unchanged) epoch and simply writes 0 again — idempotent.
+# connected/focused_window_id are cleared HERE as well: the caller's socket close is a
+# no-op without a registry entry, and ``mark_disconnected`` runs only from a socket
+# finalizer, so an offline row left ``connected=1`` by a crash would otherwise stay
+# connected forever. A LIVE socket's finalizer later writes 0 again — idempotent.
 _REVOKE_UPDATE = """
 UPDATE instances SET
     status = 'revoked',
@@ -82,7 +75,7 @@ def revoke_instance(
     main_instance_id: str,
     replacement: str | None = None,
 ) -> RevokeResult:
-    """Revoke ``instance_id`` in ONE transaction (issue #35 §5). Sync ``fn(conn)``.
+    """Revoke ``instance_id`` in ONE transaction (§5). Sync ``fn(conn)``.
 
     Sets ``status='revoked'``, ``revoked_at=now`` and — REQUIRED — ``session_id=NULL``
     (see ``_REVOKE_UPDATE``). Records NO relocation retirement here: the curator PASS's
@@ -91,7 +84,7 @@ def revoke_instance(
     rows (contract: async I/O outside the txn).
 
     MAIN guard: revoking the configured MAIN is refused unless ``replacement`` equals the
-    current ``main_instance_id``; raises :class:`RevokeMainRefused` (Task E → 409) BEFORE
+    current ``main_instance_id``; raises :class:`RevokeMainRefused` (→ 409) BEFORE
     any write. A non-main revoke ignores ``replacement``.
 
     The live-socket close is left to the caller AFTER commit; :class:`RevokeResult`
@@ -154,18 +147,16 @@ def hello_upsert(
     """Register a successful hello on an already-active row; return its new
     ``conn_epoch``, or ``None`` if no active row exists.
 
-    No longer creates rows (§3): a hello for a non-active id (deleted / revoked /
+    Never creates rows (§3): a hello for a non-active id (deleted / revoked /
     never-approved) updates nothing. The subsequent ``SELECT`` then reads back ``None``,
     which is returned as a sentinel so the caller rejects cleanly instead of doing
     ``int(None)`` — the row may have been revoked/deleted between the channel's
     ``resolve_secret`` and this write.
 
-    ``ext_version`` is the rest of the capability report (§11) and is keyword-optional so
-    every existing caller and test keeps compiling; it defaults to the same "this copy said
-    nothing" value the column defaults to. Like ``allow_execute_js`` it is OVERWRITTEN on
-    every hello rather than merged — the extension reports its live state each time, so the
-    row is a mirror, never a history. (``allow_debugger`` used to ride here too; the single
-    JS & Debugger checkbox made it dead, and migration v6 drops its column.)
+    ``ext_version`` is the rest of the capability report (§11) and is keyword-optional; it
+    defaults to the same "this copy said nothing" value the column defaults to. Like
+    ``allow_execute_js`` it is OVERWRITTEN on every hello rather than merged — the row is a
+    mirror of the extension's live state, never a history.
     """
     conn.execute(
         _HELLO_UPSERT,
@@ -209,7 +200,7 @@ def resolve_secret(
 ) -> tuple[str, str] | None:
     """Resolve a RAW secret to ``(instance_id, status)`` by hashing it, or ``None``.
 
-    Option A credential model (issue #35): the client sends the RAW secret over TLS; the
+    Credential model: the client sends the RAW secret over TLS; the
     server hashes it HERE (:func:`sha256_hex`) and matches the stored ``secret_hash`` via
     the UNIQUE ``instances_secret_hash`` index (§1). Because the DB stores only the sha256,
     a leak of the DB yields hashes, not usable secrets — presenting the stored hash value
@@ -241,13 +232,9 @@ def count_active_instances(conn: sqlite3.Connection) -> int:
 # ONLY path that restores a revoked MAIN (migration 2 retires every pre-enrolment row).
 # The ``WHERE instances.status != 'active'`` guard makes an enrolment onto an ALREADY-active
 # id a no-op (rowcount 0 → ENROLL_ID_TAKEN → the refusal the client shows), so an enrolment
-# never silently overwrites a live instance — the ONE objection the retired approval step
-# actually answered. ``conn_epoch`` / ``connected`` are LEFT untouched on the update path so
-# a reactivation does not disturb a socket that somehow still holds the id.
-#
-# This is verbatim the semantics of the removed ``_APPROVE_UPSERT``; only the actor changed
-# (the channel, inside the open window, instead of an /admin call afterwards) and the
-# ``title`` column it also wrote is gone.
+# never silently overwrites a live instance. ``conn_epoch`` / ``connected`` are LEFT
+# untouched on the update path so a reactivation does not disturb a socket that somehow
+# still holds the id.
 _ENROLL_UPSERT = """
 INSERT INTO instances (id, status, secret_hash, install_uuid, enrolled_at)
 VALUES (?, 'active', ?, ?, ?)

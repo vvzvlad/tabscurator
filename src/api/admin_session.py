@@ -1,29 +1,19 @@
-"""Admin SESSION cookie for the #36 HTML console — SIGNED and stateless.
+"""Admin SESSION cookie for the HTML console — SIGNED and stateless.
 
 The cookie a browser carries is NEVER the ADMIN_TOKEN (acc 2). It is
 ``<payload>.<signature>``: a base64url JSON payload carrying only an expiry, plus an
 HMAC-SHA256 over it. Nothing is stored server-side.
 
-WHY STATELESS, AFTER THIS WAS AN IN-MEMORY STORE. The store was per-process and
-deliberately not persisted, on the reasoning that "a restart empties it and the operator
-re-logs-in — acceptable for an admin console". In practice it is not: the service is
-auto-updated by watchtower, so the container restarts on its own schedule and the owner
-was re-typing the token at intervals he never chose. Verbatim: «почему эта хуйня
-сбрасывается? он должен блядь быть вечным, я не хочу его вводить еще раз».
+Stateless so a session survives container restarts (watchtower redeploys on its own
+schedule).
 
-WHAT THE SIGNING KEY IS, AND WHY IT IS DERIVED FROM THE TOKEN. The key is
-``sha256(b"curator-admin-session-v1|" + admin_token)``. That single choice preserves the
-guarantee the old fingerprint field existed for (acc 4, ADMIN_TOKEN rotation kills every
-session) without storing anything: a rotated token derives a different key, so every
-cookie signed under the old one fails verification. It also means the key survives a
-restart exactly as long as the token does, which is the whole point.
+The signing key is ``sha256(b"curator-admin-session-v1|" + admin_token)``: a rotated
+ADMIN_TOKEN derives a different key, so every cookie signed under the old one fails
+verification (acc 4), and the key survives a restart exactly as long as the token does.
 
-WHAT IS LOST, STATED PLAINLY. Server-side revoke. The old store could drop an id and end
-that session for everyone holding it; a signed cookie cannot be un-signed. :func:`delete`
-is therefore a CLIENT-side logout — the endpoint clears the browser's cookie — and a
-copy someone else took stays valid until it expires. The real revoke is rotating
-ADMIN_TOKEN, which invalidates every cookie at once. This is the honest price of not
-being logged out by every deploy; it is not hidden behind a comment claiming otherwise.
+There is no server-side revoke: :func:`delete` is a CLIENT-side logout (the endpoint
+clears the browser's cookie), and a copied cookie stays valid until it expires. The real
+revoke is rotating ADMIN_TOKEN, which invalidates every cookie at once.
 
 Expiry is still checked SERVER-side: it lives inside the signed payload, so editing it in
 the browser breaks the signature. The browser's own Max-Age is only a hint.
@@ -53,9 +43,8 @@ def _now_ms() -> int:
 
 
 def token_fingerprint(admin_token: str) -> str:
-    """``sha256`` hex of the ADMIN_TOKEN. Retained because callers/tests import it; the
-    cookie itself no longer carries a fingerprint — rotation is enforced by the signing
-    key instead (see the module docstring)."""
+    """``sha256`` hex of the ADMIN_TOKEN, for callers/tests. The cookie carries no
+    fingerprint; rotation is enforced by the signing key (see the module docstring)."""
     return hashlib.sha256(admin_token.encode("utf-8")).hexdigest()
 
 

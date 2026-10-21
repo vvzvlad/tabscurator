@@ -6,9 +6,7 @@
 // The stored `pattern` is a HOST pattern (the matcher grammar is hostPattern[:port];
 // a full URL is rejected 422, §8) — the tab's `<origin>/*` is only how the human reads
 // the tab it came from, and the matcher ignores the path anyway. The pattern field is
-// prefilled with the tab's host (+ explicit non-default port) and editable, because the
-// scenario the popup is FOR is "I am looking at this site and deciding where it lives":
-// hard-wiring the bare host meant filing a rule you then had to go and edit.
+// prefilled with the tab's host (+ explicit non-default port) and editable.
 //
 // The target defaults to THIS copy's SERVER-assigned instanceId (§7, from the service
 // worker) — the sensible default, since you usually curate the browser you are in — and
@@ -117,18 +115,14 @@ export async function fetchInstances(fetchFn, base, token) {
   return body.instances;
 }
 
-// The label for one browser in the <select>. It used to pair a display title with the id
-// ("Prox (prox)"); there is no separate title anymore — the id IS the name (§6) — so the
-// id stands alone and the only decoration left is marking which row is us.
+// The label for one browser in the <select>: the id is the name (§6); our own row is marked.
 export function optionLabel(id, currentId) {
   return id === currentId ? id + " — this browser" : id;
 }
 
 // The <select> options, ALWAYS containing the browser this popup runs in.
-// /api/state lists only ACTIVE instances (src/db/state.py), so a revoked copy is not in
-// it — and neither is anything at all when the call fails. Since targeting THIS browser
-// is what the popup used to do unconditionally, it must never become unreachable: it is
-// added back at the top when the list omits it.
+// /api/state lists only ACTIVE instances (src/db/state.py) and nothing when the call
+// fails, so this browser is added back at the top when the list omits it.
 export function instanceChoices(instances, currentId) {
   const out = [];
   const seen = new Set();
@@ -178,17 +172,10 @@ export async function saveRule(fetchFn, base, token, rule, { confirmImpact = fal
   return { status: resp.status, body, text };
 }
 
-// Resolve the /api base + Bearer + target instanceId (§7). The SW is the ONLY source:
-// the address setting, the RAW instance secret as the Bearer (slice C / option A — the
-// server hashes it) and the SERVER-assigned instance id, learned from a successful hello.
-//
-// There is deliberately NO instance.json fallback. It used to read `config.token` and
-// `config.instanceId`, and under enrollment neither field exists ANYWHERE anymore — the
-// shared token is gone and the id is not self-reported. The "fallback" could therefore
-// only produce `{token: undefined, instanceId: undefined}`, i.e. a rule targeted at
-// `undefined` saved with no credential: a guaranteed 401 dressed up as a working path.
-// Throwing here instead makes the real condition — this copy is not enrolled yet — the
-// thing the popup shows.
+// Resolve the /api base + Bearer + target instanceId (§7). The SW is the only source:
+// the address setting, the raw instance secret as the Bearer (the server hashes it) and
+// the server-assigned instance id from a successful hello. Throws when this copy is not
+// enrolled yet, so the popup shows that instead of saving a rule with no credential.
 export async function loadPopupContext(chromeApi) {
   let cred = null;
   let ident = null;
@@ -259,13 +246,9 @@ function notCountedIds(p) {
 
 // WHY the server is asking for confirmation, in the human's terms.
 //
-// `_requires_confirm` (src/api/rules.py) gates on THREE independent grounds and only
-// one of them is a number: (a) relocations+closures > 0, (b) the rule set crosses the
-// empty↔non-empty boundary, (c) some instance could not be counted. Reporting only (a)
-// produced the screenshot this exists to prevent: "Would relocate 0 tab(s) and close 0
-// tab(s)" next to an armed "Confirm and save" and a status claiming "this rule has an
-// impact" — zeros, an armed gate, and not a word about the real reason (the human's
-// FIRST rule, which switches the fleet-wide "unruled → main" drain on).
+// `_requires_confirm` (src/api/rules.py) gates on three grounds: (a) relocations+closures
+// > 0, (b) the rule set crosses the empty↔non-empty boundary, (c) some instance could not
+// be counted. Showing only (a) would leave zero counts next to an armed confirm button.
 //
 // The payload does not name the ground, so it is derived. `enables_drain` /
 // `disables_curation` describe the CANDIDATE rule set only (`enables_drain` is just
@@ -485,9 +468,8 @@ export async function init(doc, chromeApi, fetchFn) {
   }
 
   function freeze() {
-    // A saved rule is final for this popup: another click would file a duplicate, and
-    // editing the form after the write would preview a rule this popup can no longer
-    // create. Leaving the button disabled is the old contract; the fields follow it.
+    // A saved rule is final for this popup: another click would file a duplicate, so the
+    // button and the fields stay disabled.
     saved = true;
     if (debounceTimer !== null) {
       clearTimeout(debounceTimer);

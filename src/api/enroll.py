@@ -12,7 +12,7 @@ and :func:`src.api.admin.require_admin` rejects an instance secret with 401 on p
 "the same status an unknown token gets, so an instance cannot probe /admin". That gate is
 correct and stays. This module is therefore an ADDITIONAL, differently-authed entry point
 onto the SAME core (:func:`src.curator.enroll.arm_enroll_window`), authed by
-``require_api_caller`` (ADMIN_TOKEN **or** an active instance secret — §35 §4).
+``require_api_caller`` (ADMIN_TOKEN **or** an active instance secret, §4).
 ``POST/GET/DELETE /admin/enroll/window`` are untouched and stay ADMIN-only; the response
 body here is deliberately byte-identical to the admin POST's, so the two verbs cannot
 drift in meaning.
@@ -20,10 +20,9 @@ drift in meaning.
 WHAT THIS COSTS. An enrolled instance can now arm the enrollment window. A stolen instance
 secret therefore gains PERSISTENCE BEYOND A REVOKE: arm a window, read the code it returns,
 and enroll a second identity under a different id — one that survives revocation of the
-first. That is a real widening of what a leaked secret buys, and it is accepted, for five
-reasons that hold together and not one of which carries it alone:
+first. That widening of what a leaked secret buys is accepted because:
 
-* under issue #35 §4 the ``/api`` instance caller IS the human at the keyboard — exactly
+* under §4 the ``/api`` instance caller IS the human at the keyboard — exactly
   what :func:`src.api.guards.initiator_for` encodes (instance → ``'user'``), and what the
   four force-verbs already act on;
 * the window is short and self-closing — ``ENROLL_WINDOW_MIN`` (default 10 min), capped by
@@ -34,33 +33,18 @@ reasons that hold together and not one of which carries it alone:
   DOM of the tab that clicked, so "short" is the whole of its protection, not secrecy;
 * every arm writes an ``admin_audit`` row, and this verb records
   ``initiator=initiator_for(caller)``, so a startpage arm (``'user'``) is distinguishable
-  in the trail from an admin/MCP arm (``'admin'``). That distinction is the POINT of using
-  the helper here, not decoration — hard-coding ``"admin"`` would erase the one signal an
-  operator has that a window was armed from a browser;
+  in the trail from an admin/MCP arm (``'admin'``) — do not hard-code ``"admin"``;
 * a new instance shows up in the console's instance list, so the second identity is not
   invisible — it is a row an operator can see and revoke;
 * the service is required to be unreachable from the public internet (``deploy/DEPLOY.md``
   §3), so the attacker who holds the secret is already inside the perimeter.
 
-One more cost is NAMED here rather than paid down:
+Known cost: ``admin_audit`` is outside retention (``src/db/retention.py``), so any holder
+of an instance secret can grow it without bound. No debounce or cap: a FRESH code per open
+is load-bearing (:mod:`src.curator.enroll`); the bound is the perimeter.
 
-* ``admin_audit`` is deliberately OUTSIDE retention (``src/db/retention.py`` sweeps only
-  ``actions`` and ``js_audit``: a security trail is kept forever), and until this verb
-  existed only an ADMIN caller could append to it. Any holder of an instance secret can
-  now grow that table without bound — there is no rate limit anywhere in the service. No
-  debounce and no cap is added on purpose: a FRESH code per open is load-bearing
-  (:mod:`src.curator.enroll` — "код новый на каждое открытие окна"), so suppressing or
-  coalescing an arm would either hand the caller a code an earlier screenshot still shows,
-  or leave a clicked button with no code at all. The bound on this is the perimeter (the
-  bullet above), and the rows are the operator's evidence, not noise to be dropped.
-
-NO STOP GATE, deliberately. :func:`src.api.guards.require_not_paused` guards mutating
-verbs because the emergency stop silences the curator's AUTOMATION; arming an enrollment
-window is an operator action, not automation, so the stop has nothing to say about it.
-Symmetry with ``/admin/enroll/window`` is NOT the argument — §7 lets that one through for
-a reason that does not transfer: the same ``ADMIN_TOKEN`` already grants revoke, which is
-strictly more power, so a gate there would protect nothing. An instance secret revokes
-nothing, so this door has to stand on the operator-action reason alone.
+NO STOP GATE: :func:`src.api.guards.require_not_paused` silences the curator's
+AUTOMATION, and arming an enrollment window is an operator action.
 ``require_operational`` DOES apply: this is a write, and a degraded schema cannot be
 trusted for authoritative writes (same as the admin handler).
 """
@@ -92,17 +76,15 @@ async def open_enroll_window_api(request: Request) -> JSONResponse:
 
     Body is ignored — the window has no parameters here. Its length is the configured
     ``ENROLL_WINDOW_MIN``, the same value the admin verb arms, so the two doors cannot
-    open windows of different lengths. A FRESH code is minted on every open (slice A), so
+    open windows of different lengths. A FRESH code is minted on every open, so
     two consecutive arms never hand out the same code and a previous window's code is
     dead the moment this one is armed.
 
     Audited as ``window_open`` with ``initiator=initiator_for(caller)``: ``'user'`` for the
     startpage (an instance secret), ``'admin'`` for an ADMIN_TOKEN caller — and with
     ``instance_id=caller.instance_id``, so the row names WHICH browser armed it (``None``
-    for an ADMIN_TOKEN caller, which has no instance). Without the id an operator chasing a
-    stray enrollment reads "some browser armed a window" and cannot tell whose secret
-    leaked — which is exactly the "a new instance is visible in the console list" reason in
-    the module docstring's trade-off list.
+    for an ADMIN_TOKEN caller, which has no instance), so an operator chasing a stray
+    enrollment can tell whose secret leaked.
     """
     caller = await require_api_caller(request)
     require_operational(request)

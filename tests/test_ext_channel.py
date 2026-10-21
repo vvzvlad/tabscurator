@@ -1,6 +1,6 @@
 """WebSocket-level tests of the /ext channel via Starlette's TestClient.
 
-These drive the real endpoint under the ENROLLMENT contract (issue #35):
+These drive the real endpoint under the ENROLLMENT contract:
 
 * a hello authenticates by a per-install SECRET — the client sends the RAW ``secret``
   over TLS, the server hashes it (sha256) and resolves that to an enrolled
@@ -457,8 +457,7 @@ def test_enroll_request_valid_code_open_window_creates_an_active_instance(tmp_pa
         # The server hashed the raw wire secret on receipt: the stored secret_hash is
         # sha256(raw), never the raw value itself (option A — only the hash is persisted).
         assert row == ("active", queries.sha256_hex("a" * 64), "install-1")
-        # The enrolment is audited as the security trail of "a browser joined" — the row
-        # an operator's Approve click used to write.
+        # The enrolment is audited as the security trail of "a browser joined".
         assert _db_row(
             db_path,
             "SELECT action, initiator, instance_id FROM admin_audit WHERE action='enroll'",
@@ -473,12 +472,11 @@ def test_enroll_request_valid_code_open_window_creates_an_active_instance(tmp_pa
 
 
 def test_enroll_request_for_a_live_id_is_refused_and_does_not_disturb_it(tmp_path):
-    """A name already held by an ACTIVE instance is refused LOUDLY — the one collision the
-    removed approval step really guarded against.
+    """A name already held by an ACTIVE instance is refused LOUDLY.
 
-    Both halves matter: the newcomer gets ``id_taken`` (so its operator can see why in the
-    extension settings — the only place a refusal is visible now), and the incumbent's
-    credential is untouched, so it is not silently evicted from the fleet. Reddens if the
+    Both halves matter: the newcomer gets ``id_taken`` (its operator sees why in the
+    extension settings, the only place a refusal is visible), and the incumbent's
+    credential is untouched, so it is not silently evicted from the fleet. Fails if the
     upsert's ``WHERE status != 'active'`` guard is dropped.
     """
     app = create_app(_settings(tmp_path))
@@ -621,8 +619,8 @@ def test_enroll_wrong_protocol_version_touches_no_database(tmp_path):
     Every ``Database.read`` is a fresh sqlite connection on a thread of the shared pool, and
     this handler runs fully unauthenticated — so a read a hostile peer can trigger before
     its code is checked is a lever on the curator pass, /api/state and /metrics alike.
-    Reddens if the window read moves back ahead of the protocol check (the counter below
-    goes to 1) or if the removed capacity pre-count returns (2).
+    Fails if the window read moves ahead of the protocol check (the counter below goes
+    to 1) or if a capacity pre-count is added (2).
     """
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
@@ -643,9 +641,8 @@ def test_enroll_wrong_protocol_version_touches_no_database(tmp_path):
                 assert _recv(ws) == {"type": "enroll_rejected", "reason": "protocol"}
             assert reads["n"] == 0, "a wrong-version frame reached the DB"
 
-            # Non-vacuity: a well-formed frame DOES read — and reads exactly ONCE (the
-            # window). The capacity pre-count that used to make it two is gone; capacity is
-            # decided inside the write.
+            # Non-vacuity: a well-formed frame DOES read, exactly ONCE (the window);
+            # capacity is decided inside the write.
             with client.websocket_connect("/ext") as ws2:
                 ws2.send_json(_enroll(code="WRONGC"))
                 assert _recv(ws2) == {"type": "enroll_rejected", "reason": "bad_code"}
@@ -676,12 +673,10 @@ def test_enroll_non_ascii_code_is_rejected_cleanly(tmp_path):
 def test_hello_cannot_rename_an_instance(tmp_path):
     """A hello carries no name, and a client that sends one changes nothing.
 
-    ``title`` used to travel on this frame into /admin/instances, /api/state and the
-    console, so it had to be clamped and type-checked. The id IS the name now (§6): it is
-    assigned once at enrolment and a hello has no field that can move it. Reddens if a
-    display name is reintroduced on the authenticated path — an enrolled instance would
-    once again be able to redecorate every operator surface, and the megabyte/non-string
-    hazards would come back with it.
+    The id IS the name (§6): it is assigned once at enrolment and a hello has no field
+    that can move it. Fails if a display name is accepted on the authenticated path: an
+    enrolled instance could then redecorate every operator surface, with megabyte and
+    non-string values to clamp.
     """
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
@@ -774,8 +769,8 @@ def test_silent_socket_quota_compresses_the_first_frame_deadline():
     raises the sustained connection rate needed to hold the pre-auth ceiling by the same
     factor (~13/s -> ~128/s at ENROLL_PREAUTH_MAX=128) and refuses nobody.
 
-    Reddens if the quota is removed (the deadline stops moving) or if it becomes an
-    admission check again (this pure test would no longer describe the mechanism).
+    Fails if the quota is removed (the deadline stops moving) or if it becomes an
+    admission check (this pure test would no longer describe the mechanism).
     """
     from src.ext.channel import (
         _FIRST_FRAME_TIMEOUT_S,
@@ -802,8 +797,8 @@ def test_silent_flood_never_refuses_a_reconnect_below_the_ceiling(tmp_path):
 
     ENROLL_PREAUTH_MAX=8 → silent quota 2. Three silent sockets are held open (over quota,
     so their own deadline is compressed), and an approved instance's hello must still be
-    accepted and registered. Reddens if the silent quota is turned back into a refusal:
-    the third socket, and then the hello, would be closed at the handshake.
+    accepted and registered. Fails if the silent quota is turned into a refusal: the
+    third socket, and then the hello, would be closed at the handshake.
     """
     app = create_app(_settings(tmp_path, enroll_preauth_max=8))
     db_path = str(tmp_path / "curator.db")

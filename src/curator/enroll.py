@@ -1,6 +1,6 @@
 """Enrollment window — arm / read / close, stored in the ``settings`` TABLE (§13).
 
-Enrollment replaces the former shared /ext token: an instance enrols by presenting an
+An instance enrols by presenting an
 ``install_uuid``, a per-install secret and the id it wants, and it is admitted ONLY while
 the enrollment WINDOW is open — a short, operator-opened interval, so an enrol attempt at
 an arbitrary later time is refused. The window IS the permission: there is no second
@@ -8,10 +8,8 @@ approval step (§6), which is exactly why the window has to be short and its cod
 
 The window is modelled as a deadline stored in the ``settings`` key/value table and
 compared against ``now`` AT READ TIME, NOT a background timer (the same pattern
-``curator_stopped_at`` in :mod:`src.curator.pause` uses for its flag). That is
-deliberate — a timer would either silently close the window on a restart (an operator
-mid-approval loses it) or, if re-armed on boot, leave it open forever. Reading the deadline and comparing it to the caller's
-``now`` makes a restart a no-op: the window stays open until its stored deadline and
+``curator_stopped_at`` in :mod:`src.curator.pause` uses for its flag). Comparing the
+stored deadline to the caller's ``now`` makes a restart a no-op: the window stays open until its stored deadline and
 then reads closed, with no thread to keep alive.
 
 Two ``settings`` rows model an open window:
@@ -19,7 +17,7 @@ Two ``settings`` rows model an open window:
 * ``enroll_window_until`` — the absolute deadline (epoch ms, the unit every
   ``settings`` timestamp uses), and
 * ``enroll_window_code`` — a short, human-typeable code REGENERATED on every arm
-  (issue #35: "код новый на каждое открытие окна"), so a code leaked from a previous
+  ("код новый на каждое открытие окна"), so a code leaked from a previous
   window cannot be used to approve during a later one.
 
 Each ``fn(conn)`` body runs inside one ``Database.write`` / ``Database.read``

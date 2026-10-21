@@ -2,7 +2,7 @@
 // bundle has no generator to stamp it), and it decides the transport for every
 // credential this extension owns.
 //
-// WHY THIS IS A GATE AND NOT A HINT. The credential model is option A: the client sends
+// WHY THIS IS A GATE AND NOT A HINT. The client sends
 // the RAW instance secret and the server hashes it. That raw secret goes on the wire in
 // the enroll_request, in EVERY `hello` (once a minute, forever) and as the `/api` Bearer
 // of the startpage and the popup — and the ONLY thing hiding it is TLS. A typo'd
@@ -21,8 +21,7 @@
 // with just the address of the service. Normalization is part of THIS module on
 // purpose: it decides the scheme, and the scheme is the security decision, so it must
 // not be re-derived by any UI. An address that already carries a scheme is passed
-// through untouched, which is what keeps every stored `wss://…` working unchanged and
-// keeps an explicit `http://` / non-loopback `ws://` refused exactly as before.
+// through untouched, so an explicit `http://` / non-loopback `ws://` is still refused.
 //
 // KEEP IN SYNC with the copy in extension/pages/options.js: that page is loaded raw
 // under the extension_pages CSP and deliberately imports nothing (see its header), so
@@ -34,8 +33,7 @@
 export const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
 // "<scheme>://" at the start. The `//` matters: without it `curator.example:8000`
-// would look like the scheme "curator.example:" — which is exactly how a scheme-less
-// host:port used to fall through to `malformed`.
+// would look like the scheme "curator.example:".
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 // Add the scheme the gate would accept for this host, when the operator left it out.

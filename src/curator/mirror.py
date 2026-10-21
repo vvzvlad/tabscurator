@@ -142,26 +142,12 @@ def load_mirror(conn: sqlite3.Connection) -> Mirror:
     # sessions. A session change already wiped that instance's `tabs` (§5), so a dead
     # row's join simply finds no copy; we filter here so phase B never chases one.
     #
-    # "Phase B NOT yet completed" = no SUCCESSFUL `relocate_close` references this
-    # relocate. A completed relocation's source is already closed, so without this
-    # exclusion the done relocate row re-enters `live_relocations` next pass,
-    # `decide` finds no source (closed) and wrongly marks the SUCCESS `abandoned` —
-    # corrupting the §10 journal/metrics and letting the stale row capture a new
-    # same-URL tab.
-    #
-    # ⚠️ A `status='done'` relocate_close retires the row — AND so does a
-    # `status='pending'` one (Фаза 16, WARNING-1). A pending relocate_close is phase B
-    # IN-FLIGHT (its intent recorded before the browser close, completion not yet
-    # journaled): it must NOT re-enter as a fresh phase-B candidate, or the same source
-    # would be phase-B'd twice within a pass. The pass's reconcile step runs FIRST and
-    # resolves every PRIOR-pass pending (→ done when the source is gone, → abandoned
-    # when it is still present) BEFORE phase B; but `decide` reads THIS frozen mirror,
-    # not a re-read, so excluding pending here is what actually prevents the double
-    # phase B — a reconcile that flips a pending → done AFTER load would otherwise leave
-    # the still-frozen live row to be phase-B'd and wrongly marked `abandoned`. A
-    # pending that reconcile flips to `abandoned` (close never happened) re-enters
-    # live_relocations on the NEXT pass, one pass later — equivalent to today's
-    # connection-class retry-next-pass, no regression.
+    # A `relocate_close` with status 'done' or 'pending' retires the row. 'done': the
+    # source is closed, and re-entering would make `decide` mark the success
+    # `abandoned`. 'pending': phase B is in flight, and since `decide` reads this frozen
+    # mirror (not a re-read after reconcile), excluding it is what prevents a second
+    # phase B of the same source within a pass. A pending that reconcile flips to
+    # `abandoned` re-enters on the next pass.
     #
     # ⚠️ A `relocate_close status='failed'` (a `precondition_failed`: the source turned
     # active/pinned/audible between snapshot and close) is a TRANSIENT retry, NOT a

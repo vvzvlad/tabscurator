@@ -94,12 +94,10 @@ _LAUNCHER_GLOB = "*.app/Contents/MacOS/run"
 
 # Extensions whose per-extension storage IS a secret store, id -> what it holds.
 #
-# THIS LIST NEVER DECIDES WHAT IS COPIED. Eligibility is `eligible_extension_ids` alone and
-# no id is hard-coded by either of its layers; this map only decides how LOUD the plan is
-# about what the run DESTROYS at the destination. "19.4 MB replaced" and "this instance's
-# own MetaMask seed vault deleted" are the same number and not the same event, and the
-# second one is the decision the operator is actually taking. An id missing from this map
-# is reported plainly, never silently — the map can only add emphasis, never remove a row.
+# This list never decides what is copied (that is `eligible_extension_ids` alone); it only
+# makes the plan name what the run destroys at the destination ("this instance's own
+# MetaMask seed vault deleted" rather than a byte count). An id missing from it is still
+# reported, just without the emphasis.
 KNOWN_SECRET_STORES = {
     "nkbihfbeogaeaoehlefnkodbefgpgknn": "MetaMask — the wallet's ENCRYPTED SEED VAULT",
     "nngceckbapebfimnlniiiahkandclblb": "Bitwarden — the ENCRYPTED PASSWORD VAULT",
@@ -142,9 +140,8 @@ class CopiedState:
 class PlannedCopy:
     """One extension the plan WOULD copy: its id, total bytes and the dirs involved.
 
-    *bytes_replaced* is the other half of the transaction and the half the plan used to
-    hide: the size of what the DESTINATION already holds for this id, across exactly the
-    dirs this run replaces. It is not a merge — ``core.replace_tree`` swaps the whole
+    *bytes_replaced* is the size of what the DESTINATION already holds for this id, across
+    exactly the dirs this run replaces. It is not a merge — ``core.replace_tree`` swaps the whole
     directory — so every one of those bytes is deleted, irrecoverably and with no backup.
     The plan sizes the source and the destination with the same
     :func:`_tree_bytes`, so the two numbers are comparable.
@@ -204,9 +201,8 @@ def _pgrep(pattern: str) -> list[str]:
 
     FAILS CLOSED, and the decision is taken from the EXIT CODE, never from the shape of
     stdout. ``pgrep`` answers 0 for "matched", 1 for "no match" — and 2 for a bad pattern
-    and 3 for a fatal error, both of which print NOTHING on stdout. Reading stdout first
-    turns those two into "Brave is not running" and lets the copy proceed onto live
-    LevelDBs; reproduced with ``pgrep -fl "["`` (exit 2, empty stdout). So: anything that
+    and 3 for a fatal error, both of which print NOTHING on stdout (e.g. ``pgrep -fl "["``),
+    which stdout alone would read as "Brave is not running". So: anything that
     is not 0 or 1 is a refusal, exit 0 with no output is a refusal (pgrep claimed a match
     and printed none), and a line that cannot be parsed is NOT dropped — the caller counts
     it as a running process. A false positive costs a needless refusal; a false negative
@@ -264,9 +260,8 @@ def running_brave_processes(
     Fails CLOSED — see :func:`_pgrep` for every branch that refuses, and note that an EMPTY
     pattern set refuses HERE. With no patterns the loop below never runs, so ``pgrep`` is
     never called and every refusal in :func:`_pgrep` is skipped: the function would return
-    ``[]``, i.e. "no browser is running", having checked nothing. No caller reaches that
-    today (``plan.brave_binaries`` always contains :data:`core.DEFAULT_BRAVE_BINARY`), but
-    "fails closed" is this function's own promise and must not rest on a caller keeping it.
+    ``[]``, i.e. "no browser is running", having checked nothing. Callers always include
+    :data:`core.DEFAULT_BRAVE_BINARY`, but the guard does not rely on that.
     """
     patterns = sorted({Path(binary).name for binary in brave_binaries if str(binary)})
     if not patterns:
@@ -303,14 +298,11 @@ def browsers_to_quit(
     binary's name and all identified by a ``--type=`` flag. Quitting a browser takes its
     helpers with it, so only the type-less processes are worth naming.
 
-    The type-less set is NOT all browsers, though. On the owner's machine it also holds
-    ``chrome_crashpad_handler`` and the ``app_mode_loader`` PWA shims — processes with no
-    window and no ``--user-data-dir``, which the old code labelled "the MAIN Brave
-    profile". A shim that outlives the browser then produced a refusal telling the operator
-    to quit something that was not running, with nothing to identify it and deliberately no
-    ``--force`` to get past it. So each label carries the PID and the executable's name, and
-    anything whose executable is not one of the Brave binaries being searched for is called
-    what it is: a helper to kill, not a browser to quit.
+    The type-less set is not all browsers: it also holds ``chrome_crashpad_handler`` and
+    the ``app_mode_loader`` PWA shims, which have no window and no ``--user-data-dir`` and
+    can outlive the browser. So each label carries the PID and the executable's name, and
+    anything whose executable is not one of the searched Brave binaries is labelled a
+    helper to kill, not a browser to quit.
 
     *binary_names* are the file names :func:`running_brave_processes` searched for; the
     default is the standard Brave binary alone.
@@ -380,8 +372,7 @@ def instance_brave_binaries(instance_dir: str | Path) -> list[str]:
     visible to it instead of silently passing the check while its databases are live.
 
     Returns ``[]`` when the launcher is missing or unreadable; the caller always keeps the
-    default in the set, so a missing launcher degrades to exactly the old behaviour rather
-    than to no check at all.
+    default in the set, so a missing launcher degrades to checking the default only.
     """
     binaries = []
     for launcher in instance_launchers(instance_dir):
@@ -441,13 +432,12 @@ def unpacked_layer_unavailable(instance_dir: str | Path) -> str | None:
     own unpacked extension IS, by deriving its id from the ``--load-extension`` path baked
     into the instance's launcher. Every input to that comes from the launcher, so a missing
     launcher, an unreadable one, or one carrying no ``--load-extension`` makes the layer
-    yield an EMPTY id set — and an empty exclusion set excludes nothing. The run then goes
+    yield an EMPTY id set, and an empty exclusion set excludes nothing. The run then goes
     ahead on layer (a) alone (the source's ``Extensions/<id>/<version>/manifest.json``
-    filter), which is a real guard but a weaker one, and nothing in the output said so:
-    the operator had to infer the degradation from the phrasing of an exclusion reason.
+    filter), a weaker guard.
 
-    Degrading is deliberate — refusing the whole copy because a launcher is missing would
-    be worse — but degrading SILENTLY is not. This returns the sentence the caller prints.
+    Degrading is deliberate (refusing the whole copy over a missing launcher would be
+    worse), but it must be visible: this returns the sentence the caller prints.
     """
     if instance_unpacked_load_paths(instance_dir):
         return None
@@ -561,7 +551,7 @@ def eligible_extension_ids(
 
     1. **Negative, and the launcher's own test**: :func:`is_installed_unpacked` requires a
        ``<version>/manifest.json`` and follows no symlinks, so an empty or half-removed
-       ``Extensions/<id>`` no longer counts as installed.
+       ``Extensions/<id>`` does not count as installed.
     2. **Positive**: *exclude_ids* names the ids the TARGET instance loads unpacked,
        derived from its launcher's ``--load-extension`` path
        (:func:`instance_unpacked_extension_ids`). That does not ask what is missing from
@@ -728,12 +718,9 @@ def _exclusion_reason(
 ) -> str:
     """Why an id with stored state is not being copied — one sentence, no jargon.
 
-    THE IDENTITY WORDING IS RESERVED FOR THE ID THAT IS AN IDENTITY. Every id that lacks
-    an ``Extensions/<id>/<version>/manifest.json`` used to be told it was "loaded from
-    outside the profile, and its storage is per-install IDENTITY" — true of the curator,
-    false of the six Chrome COMPONENT extensions (Web Store, Docs Offline, …) that share
-    the shape on the real profile. They were excluded correctly and described wrongly, the
-    same conflation :func:`_refuse_ineligible_only` was already split to avoid.
+    The identity wording is reserved for the id that is an identity. Chrome COMPONENT
+    extensions (Web Store, Docs Offline, …) also lack an
+    ``Extensions/<id>/<version>/manifest.json`` but hold no per-install identity.
 
     The two are told apart by layer (b): the ids THIS instance loads unpacked are known by
     derivation, so anything else is a component/foreign extension, not this install's
@@ -781,11 +768,9 @@ def _refuse_ineligible_only(
 ) -> None:
     """Refuse an ``--only`` list naming ids that must not (or cannot) be copied.
 
-    THREE DISTINCT CASES, because collapsing them slanders the operator. A one-character
-    typo in Bitwarden's id used to be reported as "its storage holds THIS install's
-    identity", i.e. the owner was told he had nearly overwritten his ``install_uuid`` when
-    all he did was mistype. The identity wording is reserved for the case that really is
-    one, and it is kept verbatim there.
+    Distinct cases (this install's identity, nothing to copy, an unknown id), so that a
+    mistyped id is not reported as an attempt to overwrite the ``install_uuid``. The
+    identity wording is reserved for the case that really is one.
     """
     unknown = [ext_id for ext_id in only if ext_id not in eligible]
     if not unknown:

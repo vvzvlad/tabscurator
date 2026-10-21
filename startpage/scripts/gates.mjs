@@ -3,9 +3,9 @@
 // render smoke test (test/build-gates.test.js) — it covers all three, including
 // gate 2 (a string `template:` at runtime is not greppable).
 //
-// Re-measured on the PINNED Vite major (see package.json). §10 warns the 6.4.3
-// numbers do not transfer: 6.4.3 emitted `new Function(`, 8.x's rolldown/oxc emits
-// bare `Function(` — hence the `(new +)?` in gate 1's regex (`-E`, escaped paren).
+// Measured on the PINNED Vite major (see package.json): rolldown/oxc emits bare
+// `Function(` where older majors emitted `new Function(` — hence the `(new +)?` in
+// gate 1's regex (`-E`, escaped paren).
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";

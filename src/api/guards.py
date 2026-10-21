@@ -1,6 +1,6 @@
 """Request guards shared by every ``/api/*`` endpoint.
 
-* :func:`require_api_caller` — the per-caller ``/api/*`` Bearer check (issue #35 §4).
+* :func:`require_api_caller` — the per-caller ``/api/*`` Bearer check (§4).
   ADMIN_TOKEN authenticates the human/agent (``Caller("admin")``); any other Bearer is
   the RAW instance secret — the SAME credential the client sends on ``/ext`` hello —
   hashed server-side and resolved to an ACTIVE instance, yielding
@@ -45,7 +45,7 @@ from src.api.auth_metrics import auth_rejections
 _MAX_INSTANCE_SECRET = 128
 
 # Verbs that mutate state. A COOKIE-authenticated request using one of these must clear the
-# same-origin CSRF gate (issue #36 acc 3); GET/HEAD reads and Bearer-authenticated requests
+# same-origin CSRF gate (acc 3); GET/HEAD reads and Bearer-authenticated requests
 # do not (see :func:`require_same_origin`).
 _MUTATING_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
 
@@ -73,7 +73,7 @@ def _bearer_token(request: Request) -> str | None:
 
 @dataclass(frozen=True)
 class Caller:
-    """Who authenticated an ``/api/*`` request (issue #35 §4).
+    """Who authenticated an ``/api/*`` request (§4).
 
     ``kind='admin'`` is the human at the startpage OR the MCP agent, both bearing
     ADMIN_TOKEN; ``instance_id`` is None. ``kind='instance'`` is a curated browser
@@ -87,7 +87,7 @@ class Caller:
 
 
 def initiator_for(caller: Caller) -> str:
-    """Map an ``/api/*`` caller to the ``initiator`` it writes (issue #35 §5).
+    """Map an ``/api/*`` caller to the ``initiator`` it writes (§5).
 
     An instance caller is the human at the startpage → ``'user'`` (§7's forced-button
     initiator). An admin caller is an ADMIN_TOKEN-authenticated ``/api/*`` write →
@@ -104,7 +104,7 @@ def initiator_for(caller: Caller) -> str:
 async def require_api_caller(request: Request) -> Caller:
     """Authenticate an ``/api/*`` request and return (and store) its :class:`Caller`.
 
-    Order matters (issue #35 §4):
+    Order matters (§4):
 
     1. A missing / non-Bearer header is a flat 401.
     2. **ADMIN first, no DB, constant-time**: a token equal to ADMIN_TOKEN is the
@@ -162,7 +162,7 @@ async def require_api_caller(request: Request) -> Caller:
 
 
 def require_same_origin(request: Request) -> None:
-    """CSRF gate for COOKIE-authenticated MUTATING ``/admin`` requests (issue #36 acc 3).
+    """CSRF gate for COOKIE-authenticated MUTATING ``/admin`` requests (acc 3).
 
     ``SameSite=Strict`` alone is NOT sufficient here: the service sits behind a SHARED
     Traefik on ``Host(curator.example.com)``, and any neighbor service on the same
@@ -329,7 +329,7 @@ async def require_not_paused(request: Request, *, force: bool = False) -> None:
     ``force`` is §7's ONE exception: «Исключение — собственные кнопки человека, и то с
     явным ``force:true``, который пишется в ``actions`` как ``initiator=user``». The
     caller passes it ONLY for a verb that IS a button on the startpage, read from the
-    request body via :func:`read_force_body`. Under issue #35 §4 the startpage human
+    request body via :func:`read_force_body`. Under §4 the startpage human
     authenticates with the INSTANCE secret, so the caller ANDs ``force`` with
     ``caller.kind == "instance"``: an admin/agent bearing ADMIN_TOKEN never crosses the
     pause with ``{"force": true}`` (else it would bypass §7's kill-switch outside MCP).
@@ -351,12 +351,8 @@ async def require_not_paused(request: Request, *, force: bool = False) -> None:
     to the verbs which MUTATE the world — restore, undo and merge_windows each write
     their row as ``initiator='user'`` and mark ``detail`` (``restore:force``,
     ``undo_close:force``, ``{"force": true}``) so a forced action is tellable apart in the
-    archive without a new column. ``/api/focus`` writes NOTHING, on purpose: it activates
-    a tab and raises a window, moving and closing nothing, while ``actions`` is the
-    journal of what the curator DID to tabs. A row per jump would be pure noise in the
-    archive the human reads to answer "why is this tab gone", and there is nothing to
-    undo or reconcile. Forcing a jump through a pause is still gated and still explicit —
-    it is simply not an archived event.
+    archive without a new column. ``/api/focus`` writes NOTHING: it moves and closes
+    nothing, and ``actions`` is the journal of what the curator DID to tabs.
     """
     # Leaf import (no import cycle): pause.py never imports the api package.
     from src.curator.pause import read_stopped_at

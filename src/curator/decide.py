@@ -196,10 +196,9 @@ def compile_match_candidates(rules) -> list:
     silently runs the specificity ladder twice, and the ladder is not composable that
     way. With ``*.alpha.example.lc -> prox`` (valid) and ``www.alpha.example.lc -> ghost`` (orphaned),
     a tab on ``www.alpha.example.lc`` matches BOTH; the ladder says the longer, more specific
-    ``www.alpha.example.lc`` wins, so before the flag the tab is deferred to an unreachable
-    ``ghost`` — but a valid-first lookup finds ``*.alpha.example.lc`` and relocates the tab into
-    ``prox``, a home the owner never chose for it, the moment an unrelated instance is
-    retired.
+    ``www.alpha.example.lc`` wins, so the tab is deferred to the unreachable ``ghost`` —
+    a valid-first lookup would instead relocate it into ``prox``, a home the owner never
+    chose for it.
 
     So the ladder runs ONCE, over copies with the flag cleared, and the WINNER is then
     asked whether it was flagged. Rules whose PATTERN no longer compiles still drop out
@@ -525,11 +524,10 @@ def decide_window_merges(
     the source guard AND still has an unpinned tab to move. An instance with fewer
     than two mergeable windows, or no eligible source, yields no decision.
 
-    ``main`` is exempt: its windows are NEVER auto-merged (owner decision 2026-08-06
-    — laptop sleep counts as idle, so the first pass after a night would otherwise
-    collapse the whole main layout at once, and window_merge is not undoable). Manual
-    ``merge_windows`` on main still works; only the automatic step-9 folding is
-    withheld. Thematic instances (prox, media, ...) still merge as before."""
+    ``main`` is exempt: its windows are NEVER auto-merged — laptop sleep counts as idle,
+    so the first pass after a night would collapse the whole main layout at once, and
+    window_merge is not undoable. Manual ``merge_windows`` on main still works.
+    Thematic instances (prox, media, ...) merge."""
     merges: list = []
     for instance_id in ready_ids:
         if instance_id == main_instance_id:

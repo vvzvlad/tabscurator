@@ -31,20 +31,14 @@ _RETENTION_INTERVAL_S = 24 * 60 * 60
 # flush (§10). The horizon has to outlive the LONGEST a claimed batch can stay
 # unconfirmed — and the real upper bound is not the network.
 #
-# A week looks generous against "offline can last days" (§10) until the pause is taken
-# into account: while a pause is armed EVERY flush answers 423, and a pause is extended
-# by simply pressing the button again, with no cap on how many times (§7 — only each
-# individual pause is finite). So the client can legitimately sit on one claimed batch,
-# key and all, for far longer than a week. Sweeping the marker first is not a harmless
-# cleanup: the batch is not dropped, it is RE-SENT, and with the marker gone it applies a
-# SECOND time — a duplicated ``reorder``, exactly the outcome this whole mechanism
-# exists to prevent, and the ops are NOT self-idempotent (``reorder`` and ``add`` both
-# compose rather than settle).
+# While a stop is armed EVERY flush answers 423, and a stop has no deadline (§7), so a
+# client can sit on one claimed batch, key and all, for far longer than a week. Sweeping
+# the marker first means the batch is RE-SENT and applied a SECOND time — the ops are
+# NOT self-idempotent (``reorder`` and ``add`` compose rather than settle).
 #
-# 30 days is chosen to swallow a realistically-forgotten pause plus a long absence, and
-# it costs nothing: one short ``settings`` row per FLUSH (not per op), pruned by age.
-# Even a daily flusher leaves ~30 rows. The horizon stays well inside ``actions``' own
-# (90 days by default), so this is not a new storage class either.
+# 30 days covers a forgotten stop plus a long absence at the cost of one short
+# ``settings`` row per FLUSH (not per op), and stays inside ``actions``' own horizon
+# (90 days by default).
 _DEFAULT_IDEMPOTENCY_RETENTION_DAYS = 30
 
 

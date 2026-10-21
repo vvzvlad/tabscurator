@@ -1,18 +1,18 @@
-"""Task G (§8/§9, issue #35): the enrollment observability metrics and the
-`instancegen bundle` universal-build tool.
+"""The enrollment observability metrics (§8/§9) and the `instancegen bundle`
+universal-build tool.
 
 Covers:
   * ``curator_enroll_window_seconds_remaining`` — the clamped gauge semantics
     (no window = 0, open = positive, armed-but-past = 0, at-deadline = 0)
     at both the pure-helper level and through a real ``/metrics`` scrape, including the
     "survives a restart" acceptance (the gauge is DB-derived, not process memory).
-  * ``curator_auth_rejections_total{reason}`` — the newly LABELED counter family, one
-    series per coarse reason (so the §37 alert can key on ``reason="enroll_bad_code"``),
-    and the empty-breakdown case emitting a still-valid exposition.
+  * ``curator_auth_rejections_total{reason}`` — the LABELED counter family, one series
+    per coarse reason (so the alert can key on ``reason="enroll_bad_code"``), and the
+    empty-breakdown case emitting a still-valid exposition.
   * ``instancegen bundle`` — a hostless, key-free, instance.json-free universal bundle
     that any two runs produce byte-for-byte identically apart from the build minute inside
-    the manifest's ``version``, which the build stamps on purpose (acc 16). That one
-    value is normalised, not skipped: every file, including ``manifest.json``, is compared.
+    the manifest's ``version``, which the build stamps on purpose. That one value is
+    normalised, not skipped: every file, including ``manifest.json``, is compared.
 
 Each assertion is written so that removing the guard it names reddens the test.
 """
@@ -102,7 +102,7 @@ def test_enroll_window_seconds_remaining_clamped_at_zero():
     # EXACTLY at the deadline -> 0, deliberately indistinguishable from "no window".
     assert _enroll_window_seconds_remaining(Snapshot(enroll_window_until=now), now) == 0
     # Armed but PAST the deadline -> CLAMPED to 0: a naturally-expired window reads closed,
-    # not overdue (symmetric with the no-window case; the overdue alert was dropped in #37).
+    # not overdue (symmetric with the no-window case; there is no overdue alert).
     # Redden: return the negative magnitude and a benign expired window reads as an anomaly.
     assert _enroll_window_seconds_remaining(Snapshot(enroll_window_until=now - 5_000), now) == 0
     assert _enroll_window_seconds_remaining(Snapshot(enroll_window_until=now - 400), now) == 0
@@ -233,17 +233,13 @@ def _without_build_minute(text: str) -> str:
     what keeps everything else under comparison: the rest of `version`, key order,
     indentation and `ensure_ascii`.
 
-    Be precise about what that buys. These are TWO BUILDS ON THE SAME MACHINE, so what
-    they can see is exactly what DIFFERS BETWEEN RUNS: a uuid4, a pid, a random salt, a
-    counter, an unnormalised clock — any of those smuggled anywhere into the built tree
-    reddens them. A value that is CONSTANT on one machine — a user name, the absolute
-    build directory, the hostname — is invisible to a two-run comparison by construction
-    and always will be; it would be stamped identically into both builds. That half of the
-    guarantee is carried instead by the FORMAT assertions in
+    Two builds on the same machine catch what DIFFERS BETWEEN RUNS (a uuid4, a pid, a
+    random salt, an unnormalised clock). A value constant on one machine (user name,
+    build directory, hostname) is invisible to this comparison; that half is carried by
+    the FORMAT assertions in
     `tests/test_instancegen.py::test_cli_bundle_stamps_the_version` and
-    `::test_cli_bundle_writes_no_version_name_and_a_short_version`, which pin the whole
-    shape of the stamped version — four integer components and nothing else — and so reject
-    an extra field regardless of whether it varies.
+    `::test_cli_bundle_writes_no_version_name_and_a_short_version`, which pin the stamped
+    version to four integer components and nothing else.
     """
     return _BUILD_MINUTE_RE.sub(r'\1.<minute>"', text)
 
@@ -251,11 +247,11 @@ def _without_build_minute(text: str) -> str:
 def _manifest_text(root: Path) -> str:
     """The built manifest's TEXT, build-minute-normalised. Nothing else is dropped.
 
-    Deliberately NOT a parsed dict: the digest this replaces held key order, indentation and
-    `ensure_ascii`, and comparing dicts would let a re-serialisation with `sort_keys=True`
-    or `ensure_ascii=True` stay green. Also deliberately does NOT require a stamp to be
-    present: built from a tarball with no `.git`, the build degrades to a verbatim copy and
-    these tests must still be testing reproducibility, not the availability of git.
+    Deliberately NOT a parsed dict: comparing text holds key order, indentation and
+    `ensure_ascii`, which a re-serialisation with `sort_keys=True` or `ensure_ascii=True`
+    would change. Also does NOT require a stamp to be present: built from a tarball with no
+    `.git`, the build degrades to a verbatim copy and these tests must still be testing
+    reproducibility, not the availability of git.
     """
     return _without_build_minute((root / "manifest.json").read_text(encoding="utf-8"))
 
@@ -318,9 +314,8 @@ def test_bundle_two_runs_byte_identical(tmp_path):
 
 
 def test_bundle_writes_no_secret_material_beside_or_inside_the_output(tmp_path):
-    # The generator used to persist an RSA private key in a `.instancegen` sibling of the
-    # bundle. Nothing generates or stores key material anymore, so neither the distributed
-    # tree nor its parent gains a secret. Redden: bring key generation back.
+    # Nothing generates or stores key material, so neither the distributed tree nor its
+    # parent gains a secret.
     root = tmp_path / "fleet"
     out = root / "dist"
     assert cli.main(["bundle", "--out", str(out), "--extension-dir", str(REPO_EXTENSION)]) == 0

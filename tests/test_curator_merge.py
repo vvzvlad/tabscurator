@@ -60,7 +60,7 @@ def _plan(mirror, ready, main_instance_id="main"):
     )
 
 
-# --- main is exempt from automatic window merge (§9, owner decision 2026-08-06) --
+# --- main is exempt from automatic window merge (§9) ------------------------------
 def test_main_windows_are_not_auto_merged_but_thematic_still_are():
     # main and a thematic instance each have two mergeable, all-idle windows. In the
     # SAME plan main is skipped entirely while the thematic instance folds normally.

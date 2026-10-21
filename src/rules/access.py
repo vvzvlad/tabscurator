@@ -1,7 +1,7 @@
 """Synchronous ``fn(conn)`` bodies for the ``rules`` table (§8).
 
-Every mutating function here runs INSIDE one ``Database.write`` transaction (Фаза 2
-contract: no ``await``, one BEGIN/COMMIT). All SQL is parameterized; no id is ever
+Every mutating function here runs INSIDE one ``Database.write`` transaction (no
+``await``, one BEGIN/COMMIT). All SQL is parameterized; no id is ever
 string-interpolated. Reads are plain callables usable from ``Database.read`` too.
 
 The ``rules`` schema (§4) is::
@@ -92,9 +92,9 @@ def delete_rule(conn: sqlite3.Connection, rule_id: int) -> None:
 
 
 def known_instance_ids(conn: sqlite3.Connection) -> set[str]:
-    """Ids of ACTIVE instances (issue #35 §6).
+    """Ids of ACTIVE instances (§6).
 
-    Filtered to ``status='active'`` so a revoked/pending instance is no longer a legal
+    Filtered to ``status='active'`` so a revoked/pending instance is not a legal
     rule/exemption target: its rules go ``invalid=1`` on the next ``revalidate_rules`` and
     a new rule/exemption pointing at it is rejected at save. Its THREE consumers each
     exempt the configured MAIN INDEPENDENTLY (``curator._revalidate_rules`` unions

@@ -345,8 +345,8 @@ describe("server clock offset (§10)", () => {
   });
 
   it("a connected instance with an OLD snapshot is still 'на связи' (§62 item 1: no staleness)", async () => {
-    // Mirror-freshness is gone (issue #62 item 1): a connected instance reads "на связи"
-    // however old its last snapshot is. Reddens if the stale branch is reintroduced.
+    // No mirror-freshness state: a connected instance reads "на связи" however old its
+    // last snapshot is.
     const env = makeChrome({ tabs: [], messages: { get_identity: { instanceId: "me" } } });
     const serverNow = NOW + 10_000;
     const { fetchFn } = makeFetch({
@@ -364,8 +364,8 @@ describe("server clock offset (§10)", () => {
 
   it("the 1s tick does NOT rebuild the foreign TAB LISTS (§10 promises hundreds of rows)", async () => {
     // The expensive grouping must keep its identity across a tick so Vue does not re-diff
-    // every v-for row. (Status is no longer time-dependent — §62 item 1 — but the tick
-    // still invalidates the cheap status layer, so the identity guarantee still matters.)
+    // every v-for row. (Status is not time-dependent, but the tick still invalidates the
+    // cheap status layer, so the identity guarantee matters.)
     let localNow = NOW;
     const env = makeChrome({ tabs: [], messages: { get_identity: { instanceId: "me" } } });
     const { fetchFn } = makeFetch({
@@ -451,7 +451,7 @@ describe("raise a space (§62 item 3)", () => {
   }
 
   it("raises a BACKGROUND instance, whose focused_window_id is null, by its busiest window", async () => {
-    // The regression this guards: `focused_window_id` means "the window on screen RIGHT
+    // `focused_window_id` means "the window on screen RIGHT
     // NOW, null when the browser is unfocused" (§5). A foreign browser is unfocused
     // exactly when you want to raise it, so gating on that field alone made the row dead
     // in the only case it exists for. Every other fixture here hard-codes a number,
@@ -1234,10 +1234,8 @@ describe("enroll status banner (§7)", () => {
   });
 
   it("a bundled instance.json serviceUrl can NO LONGER fake 'address configured'", async () => {
-    // The old fallback set hasAddress from `config.serviceUrl` (and took a `config.token`
-    // that has not existed since the shared token was removed). A fleet bundle shipping a
-    // bootstrap address therefore switched the "адрес не настроен" banner OFF on profiles
-    // that had no secret and could talk to nobody. hasAddress now comes from the SW alone.
+    // hasAddress comes from the SW alone: a bundle shipping a bootstrap `config.serviceUrl`
+    // must not switch the "адрес не настроен" banner OFF on a profile with no secret.
     const env = makeChrome({
       tabs: [],
       credential: null,
@@ -1282,8 +1280,8 @@ describe("enroll status banner (§7)", () => {
 
   it("shows 'не зарегистрирован' — there is no 'ожидает одобрения' state left", async () => {
     // Enrolment is one step (§6): an enroll_request is accepted or refused on the spot, so
-    // a browser is either enrolled or it is not. The SW no longer reports `pending`; if an
-    // old worker still does, the banner must not invent a waiting state for it.
+    // a browser is either enrolled or it is not. If an old worker still reports `pending`,
+    // the banner must not invent a waiting state for it.
     for (const enrollState of ["needs-enroll", "pending"]) {
       const env = makeChrome({
         tabs: [],

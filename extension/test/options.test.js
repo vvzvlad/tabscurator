@@ -13,10 +13,6 @@ import {
   serviceAddressError as swServiceAddressError,
 } from "../src/service-address.js";
 
-// There is no installUuidPrefix test anymore, and no installUuid row on the page to test:
-// the "this install's identity" line was removed with the redesign (see constants.js —
-// /admin stopped printing the uuid, so the prefix had nothing left to be compared with).
-
 // --- the service address gate (§7) ------------------------------------------
 describe("serviceAddressError", () => {
   // Option A puts the RAW secret on the wire (enroll_request, every hello, the /api
@@ -37,9 +33,8 @@ describe("serviceAddressError", () => {
     // service URL out of the address bar is the normal way to fill this field.
     ["https://curator.example", null],
     ["http://curator.example", "http-scheme"], // plaintext: still refused
-    // A SCHEME-LESS address is now the normal way to fill the field: the only scheme
-    // that could have been meant is added by the gate itself, so these are accepted
-    // (they used to be "malformed" — a demand for a prefix that had no alternative).
+    // A SCHEME-LESS address is the normal way to fill the field: the gate adds the only
+    // scheme that could have been meant, so these are accepted.
     ["curator.example:8000", null],
     ["curator.example", null],
     ["localhost:8000", null], // → ws:// (the loopback development exception)
@@ -77,9 +72,8 @@ describe("serviceAddressError", () => {
 
 // --- the scheme is derived, not demanded (§7) --------------------------------
 describe("normalizeServiceAddress", () => {
-  // The operator used to have to type `wss://` in front of an address where no other
-  // scheme was ever acceptable. The scheme is a decision this module makes (it IS the
-  // security decision), so it makes it — and only for an address that carries none.
+  // The scheme is a decision this module makes (it IS the security decision), and only
+  // for an address that carries none.
   const NORM = [
     ["curator.beta.example.lc", "wss://curator.beta.example.lc"],
     ["curator.beta.example.lc:8443", "wss://curator.beta.example.lc:8443"],
@@ -166,11 +160,9 @@ describe("enrollLabel", () => {
   });
 
   it("surfaces the reason on the QUARANTINE path, which cannot recover by itself", () => {
-    // The regression this pins: a quarantined instance keeps a valid old secret, so
-    // getEnrollState answers `quarantined` and never needs-enroll — gate the reject on
-    // needs-enroll only and the operator who typed a wrong code sees the same
-    // "требуется повторная регистрация" as before submitting, forever. The staged code was
-    // wiped with the reject, so the probe will not retry and only the operator moves this.
+    // A quarantined instance keeps a valid old secret, so getEnrollState answers
+    // `quarantined`, never needs-enroll — the reject reason must still be shown there, or
+    // the operator who typed a wrong code sees no change (the staged code is wiped).
     const label = enrollLabel("quarantined", "bad_code");
     expect(label).toContain("повторная регистрация отклонена");
     expect(label).toContain("неверный код");
@@ -412,9 +404,6 @@ describe("options: the service address is validated before it is stored (§7)", 
 
     expect(stored.serviceAddress).toBeUndefined(); // never persisted
     // The refusal is red, under the field, and it names both the problem and the fix.
-    // (It used to be a sentence in the page-level status row saying the secret "would
-    // travel in the clear"; the wording moved to the field with the paragraph about
-    // schemes that used to sit above it.)
     expect(doc.els["service-address-error"].textContent).toMatch(/wss:\/\//);
     expect(doc.els["service-address-error"].textContent).toMatch(/unencrypted/i);
     expect(doc.els["service-address"].classList.contains("is-invalid")).toBe(true);

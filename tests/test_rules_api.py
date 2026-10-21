@@ -1,10 +1,9 @@
 """/api/rules CRUD + confirm_impact + /api/rules/preview (§8, §10) via TestClient.
 
-Preview no longer reads a stale mirror: it ACTIVELY requests a fresh snapshot from
-each connected instance and counts against the refreshed mirror (§8). So the count
-tests connect a real websocket (like test_restore.py's `_connect_fresh`) and let it
-answer the snapshot_request — there is no `state_fresh_ms=10**12` mask any more; the
-suite runs with the realistic default freshness window.
+Preview ACTIVELY requests a fresh snapshot from each connected instance and counts
+against the refreshed mirror (§8). So the count tests connect a real websocket (like
+test_restore.py's `_connect_fresh`) and let it answer the snapshot_request; the suite
+runs with the realistic default freshness window.
 
 Each confirm test is written so the gate reddens if its guard is removed (the SUM
 threshold, the always-gated DELETE, the empty→non-empty drain, an uncountable
@@ -23,7 +22,7 @@ from starlette.testclient import TestClient
 from src.app import create_app
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -39,10 +38,9 @@ def _now_ms():
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{
             "state_fresh_ms": 3000,
@@ -174,7 +172,7 @@ def _connect_fresh(client, db_path, instance_id, session="sess-1", tabs=None):
     After this the mirror holds ``tabs`` and preview finds the instance already
     fresh (no re-request), so the HTTP call can run inline.
     """
-    # Secret-based hello (issue #35): approve the instance (Task E) before it can hello.
+    # Secret-based hello: the instance must be enrolled before it can hello.
     approve_instance(db_path, instance_id)
     ws = client.websocket_connect("/ext").__enter__()
     ws.send_json(_hello(instance_id=instance_id, session=session))
@@ -202,7 +200,7 @@ def _connect_unanswered(client, db_path, instance_id, session="sess-1"):
     The instance is connected but has never delivered a snapshot, so preview MUST
     actively request one — the hook the `preview-requests-snapshot` guard tests.
     """
-    # Secret-based hello (issue #35): approve the instance (Task E) before it can hello.
+    # Secret-based hello: the instance must be enrolled before it can hello.
     approve_instance(db_path, instance_id)
     ws = client.websocket_connect("/ext").__enter__()
     ws.send_json(_hello(instance_id=instance_id, session=session))
@@ -252,12 +250,12 @@ def test_create_rejects_unknown_instance_422(tmp_path):
 
 
 def test_rule_to_revoked_rejected_but_x_to_main_stays_valid(tmp_path):
-    """issue #35 §6 cascade at the ``rules`` consumer of ``known_instance_ids``: a rule
-    targeting a REVOKED instance is rejected (the id is no longer active/known), while a
-    rule ``X -> main`` is still accepted even though MAIN has no active row — the consumer
+    """Revoke cascade at the ``rules`` consumer of ``known_instance_ids``: a rule
+    targeting a REVOKED instance is rejected (the id is not active/known), while a rule
+    ``X -> main`` is still accepted even though MAIN has no active row, as the consumer
     exempts MAIN. Reverting the active-only filter makes the revoked target pass (the
-    ``== 422`` reddens); dropping the main exemption makes ``X -> main`` a 422 (the
-    ``!= 422`` reddens)."""
+    ``== 422`` fails); dropping the main exemption makes ``X -> main`` a 422 (the
+    ``!= 422`` fails)."""
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:

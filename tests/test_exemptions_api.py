@@ -1,11 +1,9 @@
-"""``GET/POST/DELETE /api/exemptions`` (§10) — the human's «не трогать до …».
+"""``GET/POST/DELETE /api/exemptions`` (§10): the human's «не трогать до …».
 
-The table and the pass-side reader have existed since the schema landed; only
-``restore`` ever wrote to it, so the human could neither set a protection nor see /
-lift the ones restore had written. These tests pin the contract AND the property that
-actually matters: a row written through the endpoint is honoured by the SAME step-4
-guard the pass runs (:func:`src.curator.decide.step4_passes`), matched on the
-NORMALIZED url — otherwise the endpoint would write rows nobody reads.
+These tests pin the contract AND the property that matters: a row written through the
+endpoint is honoured by the SAME step-4 guard the pass runs
+(:func:`src.curator.decide.step4_passes`), matched on the NORMALIZED url; otherwise the
+endpoint would write rows nobody reads.
 """
 
 import sqlite3
@@ -18,7 +16,7 @@ from starlette.testclient import TestClient
 from src.app import create_app
 
 ADMIN_TOKEN = "test-admin-token"
-# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret (issue #35 §4).
+# /api/* accepts either an admin (ADMIN_TOKEN) or an active-instance secret.
 # The generic tests here just need a valid caller, so they use the admin credential;
 # the force/pause tests that must EXECUTE a forced verb switch to an instance secret.
 AUTH = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
@@ -31,10 +29,9 @@ def _now_ms():
 def _settings(tmp_path, **over):
     """This file's settings, built on the ONE shared surface in ``tests/conftest.py``.
 
-    Only what this file deliberately differs on is listed below; everything else — and
-    every field ``src.settings.Settings`` grows later — is inherited, so a missing
-    attribute can no longer surface as an AttributeError inside an unrelated background
-    curator pass (which a TestClient's real lifespan does start).
+    Only what this file deliberately differs on is listed below; everything else is
+    inherited, so a missing attribute cannot surface as an AttributeError inside an
+    unrelated background curator pass (which a TestClient's real lifespan does start).
     """
     return make_settings(tmp_path, **{**{
             "cmd_timeout_ms": 1000,
@@ -109,11 +106,11 @@ def test_post_creates_and_refreshes_by_instance_and_url(tmp_path):
 
 
 def test_exemption_to_revoked_rejected_but_x_to_main_allowed(tmp_path):
-    """issue #35 §6 cascade at the ``exemptions`` consumer of ``known_instance_ids``: an
+    """Revoke cascade at the ``exemptions`` consumer of ``known_instance_ids``: an
     exemption on a REVOKED instance is rejected while one on MAIN (no active row) is
-    accepted — the consumer exempts MAIN. Reverting the active-only filter makes the
-    revoked target pass (the ``== 422`` reddens); dropping the main exemption makes MAIN a
-    422 (the ``== 201`` reddens)."""
+    accepted, as the consumer exempts MAIN. Reverting the active-only filter makes the
+    revoked target pass (the ``== 422`` fails); dropping the main exemption makes MAIN a
+    422 (the ``== 201`` fails)."""
     app = create_app(_settings(tmp_path))
     db_path = str(tmp_path / "curator.db")
     with TestClient(app) as client:
@@ -271,8 +268,8 @@ def test_post_rejects_a_url_the_pass_could_never_match(tmp_path):
     The pass matches ``normalize_url(exemption.url) == normalize_url(tab.url)``, and
     ``normalize_url`` is ``urlsplit``-based: without a scheme the whole string lands in
     ``path`` and normalises to ``grafana.example.lc/d/1``, which can never equal the live tab's
-    ``https://grafana.example.lc/d/1``. Accepting it produced a 201 and a row ``GET`` lists as
-    ACTIVE, while the next pass closed the very tab the human had just protected.
+    ``https://grafana.example.lc/d/1``. Accepting it would produce a 201 and a row ``GET``
+    lists as ACTIVE, while the next pass closes the very tab the human just protected.
 
     The test proves the failure it prevents, not just the status code: the rejected
     string is fed through the real matcher to show it never matches."""

@@ -6,16 +6,9 @@
    is a CSS shape.
 
    KEEP IN SYNC with the <style> block in startpage/index.html AND with templates/app.css
-   (the service's /admin console): the `:root` and `@media (prefers-color-scheme: dark)`
-   token blocks below are the startpage's blocks, copied verbatim (dedented), and app.css
-   carries the same copy. The startpage cannot link this file — its CSS is inline on
-   purpose, so the built bundle stays pure JS and the render smoke test can import the
-   entry without a CSS asset (the reason is spelled out in startpage/index.html itself) —
-   and the console is served by the Python service off its own route, out of a directory
-   the .crx does not ship. So the tokens are duplicated three ways, not shared: any change
-   to a token — value, name or the contrast note above it — MUST be mirrored in BOTH other
-   files. The same paired-marker convention is used by extension/src/quicklinks.js <->
-   startpage/src/lib/adapters.js.
+   (the /admin console): the `:root` and dark-mode token blocks below are copied verbatim
+   in all three files, because neither the inline startpage CSS nor the service-served
+   console can link this file. Any token change must be mirrored in both other files.
 
    The contrast claim comes with the tokens: EVERY TEXT TOKEN CLEARS WCAG AA (4.5:1) on
    the real composited backdrop (card/chip/field over the gradient), in both themes. The
@@ -262,12 +255,8 @@ code {
    of the block without a second element that popup.js would have to write into. The bar
    is the accent, never red: "0 tabs" is a perfectly normal answer here.
 
-   ::first-line paints the first VISUAL line, not the first sentence, so the emphasis is
-   weight + full-contrast colour at the SAME size as the rest. A size jump was measured
-   and rejected: the headline is 299px wide at 380px popup width with single-digit counts
-   and 319px is all there is, so "Would relocate 300 tab(s) and close 120 tab(s)…" takes
-   two lines — and a size that changes mid-sentence looks broken, while a weight that
-   does not carry to the second line only looks less emphatic. */
+   ::first-line paints the first visual line, which may end mid-sentence, so the emphasis
+   is weight + colour at the same size (a size change mid-sentence looks broken). */
 .ui-impact {
   margin: 2px 0 13px;
   padding: 10px 12px;

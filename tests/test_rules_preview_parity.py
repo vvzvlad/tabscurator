@@ -1,14 +1,12 @@
 """``simulate`` (preview) vs ``decide`` (the pass) on ONE fixture — the anti-drift guard.
 
-§8 says the preview must model the WHOLE next pass and is the replacement for the removed
-action-count limiter; it also says the preview is server-side precisely so it is not "a
-second implementation of the matcher" that "would systematically lie". It drifted anyway:
-the pass grew an orphaned-rule branch and a same-pass duplicate branch, and the preview —
-carrying its own copy of the routing — kept reporting relocations the pass would never
-perform, to the wrong destination.
+§8 says the preview must model the WHOLE next pass, and is server-side precisely so it is
+not "a second implementation of the matcher" that "would systematically lie". A routing
+branch added to only one engine (e.g. orphaned rules, same-pass duplicates) makes the
+preview report relocations the pass would never perform.
 
 So these tests do not assert hand-computed numbers. They build one mirror, run BOTH
-engines over it, and compare. A future branch added to only one side reddens here.
+engines over it, and compare. A branch added to only one side fails here.
 
 KNOWN and deliberate divergence, excluded from the fixtures below: preview does not read
 live ``relocate`` rows (phase-A/phase-B bookkeeping), so no fixture carries one. That is
@@ -106,18 +104,18 @@ def _assert_agree(dec, prev):
         sorted((d.tab.url, d.tab.instance_id, d.home) for d in dec.phase_a)
 
 
-# --- THE regression: an orphaned rule defers, it does NOT drain to main -----
+# --- an orphaned rule defers, it does NOT drain to main ---------------------
 def test_orphaned_rule_defers_in_both_engines(tmp_path):
-    """The reviewer's exact configuration.
+    """An orphaned rule defers in both engines.
 
     ``grafana.example.lc -> ghost`` is orphaned (its instance is retired, so the rule is flagged
     ``invalid``); a valid ``other.lc -> prox`` keeps the policy non-empty so the drain is
     on. The tab in ``prox`` matches the ORPHANED rule.
 
     The pass defers it (its home exists as policy, not as an instance) and leaves it
-    alone. The preview used to call it unruled, drain it to ``main`` and report
-    ``relocations: 1`` pointing at the wrong instance — an inflated count AND a false
-    destination on the screen the owner confirms from.
+    alone. Treating it as unruled would drain it to ``main`` and report
+    ``relocations: 1`` pointing at the wrong instance on the screen the owner confirms
+    from.
     """
     tabs = [_tab("prox", 1, "https://grafana.example.lc/d/x")]
     rules = [_rule(1, "grafana.example.lc", "ghost", invalid=1), _rule(2, "other.lc", "prox")]
@@ -150,8 +148,8 @@ def test_path_prefix_rule_agrees(tmp_path):
 
 def test_second_identical_tab_defers_instead_of_opening_twice(tmp_path):
     """Two tabs, same URL, same target, one pass: the pass opens ONE copy and defers the
-    other (§7 forbids the curator creating duplicates of its own). The preview used to
-    count two relocations."""
+    other (§7 forbids the curator creating duplicates of its own); the preview must count
+    one relocation, not two."""
     tabs = [
         _tab("prox", 1, "https://grafana.example.lc/d/x"),
         _tab("prox", 2, "https://grafana.example.lc/d/x"),

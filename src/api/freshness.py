@@ -2,14 +2,10 @@
 
 Restore (``/api/actions/:id/restore`` and pass undo), the rule preview (§8), the
 manual ``reset`` (§8/§10) and ``/api/state``'s background kick all need the same
-thing: "make this instance's mirror fresh, now". Each used to own a copy of the
-poll loop, and all but ``/api/state``'s wrote ``ConnState.pending_snapshot_id``
-UNCONDITIONALLY — which silently ejects an instance from a curator pass that is in
-flight. The channel matches snapshot ids EXACTLY
-(:func:`src.ext.channel._handle_snapshot`), so overwriting a pass's ``pass-<uuid>``
-makes the instance's answer to the PASS be dropped, its
-``last_applied_snapshot_id`` never matches what the pass sent, and the pass
-excludes the instance without a word.
+thing: "make this instance's mirror fresh, now". The channel matches snapshot ids
+EXACTLY (:func:`src.ext.channel._handle_snapshot`), so overwriting a pass's
+``pass-<uuid>`` in ``ConnState.pending_snapshot_id`` would drop the instance's answer
+to the PASS and silently exclude it from the pass.
 
 **The rule: never clobber a foreign ``pending_snapshot_id``.** A request is issued
 only when nothing is in flight. When something IS in flight — ``pass-<uuid>`` from
