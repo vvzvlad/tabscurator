@@ -18,8 +18,9 @@ describe("manifest permissions (§10 startpage columns)", () => {
   it("is exactly the documented set — nothing added, nothing dropped", () => {
     expect([...manifest.permissions].sort()).toEqual(
       // `debugger` is the chrome.debugger (CDP) path — set_focus_emulation and later slices
-      // (§12), gated at the edge by the single JS & Debugger checkbox.
-      ["alarms", "bookmarks", "debugger", "history", "idle", "scripting", "storage", "tabs"].sort(),
+      // (§12), gated at the edge by the single JS & Debugger checkbox. `downloads` backs the
+      // `download_file` verb (§6) and adds a "Manage your downloads" line to the install prompt.
+      ["alarms", "bookmarks", "debugger", "downloads", "history", "idle", "scripting", "storage", "tabs"].sort(),
     );
   });
 

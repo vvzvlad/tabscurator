@@ -306,6 +306,29 @@ def build_mcp(app_ref) -> MCPServer:
         ))
 
     @mcp.tool()
+    async def download_file(instance: str, url: str, filename: str | None = None,
+                            timeout_ms: int | None = None,
+                            expected_session: str | None = None) -> dict:
+        """Download an http/https url THROUGH THE BROWSER; answers {ok, path, bytes, mime, state, final_url}.
+
+        FIXED-function (url is DATA, not code): no execute_js checkbox, no js_audit row — but
+        pause-gated and behind the http/https edge guard, like navigate_tab. The fetch rides the
+        chosen instance's SESSION COOKIES, which is what gets past the 403 / anti-bot a plain
+        curl hits. chrome.downloads is used deliberately: the MCP server runs REMOTELY and cannot
+        write the laptop's disk, and streaming the bytes back through the result would bloat the
+        agent's context — so the file lands in the browser's download dir and the answer is its
+        on-disk path, which the agent then moves into its project.
+
+        It does NOT run page JS, so a file only an in-page script can assemble is out of scope. A
+        download that overruns timeout_ms returns a definite precondition_failed while the browser
+        may keep downloading — the verb never hangs. timeout_ms is clamped to
+        EXECUTE_JS_MAX_TIMEOUT_MS and defaults to that ceiling when omitted."""
+        return await _guarded(tools.download_file(
+            _host(), instance=instance, url=url, filename=filename, timeout_ms=timeout_ms,
+            auth_ctx=current_mcp_session(), expected_session=expected_session,
+        ))
+
+    @mcp.tool()
     async def wake_tab(instance: str, tab_id: int,
                        expected_session: str | None = None) -> dict:
         """Wake a DISCARDED tab and wait for it to load (§6, issue #68).

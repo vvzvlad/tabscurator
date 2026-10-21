@@ -1751,6 +1751,56 @@ async def navigate_tab(app, *, instance: str, tab_id: int, url: str,
     }
 
 
+async def download_file(app, *, instance: str, url: str, filename: str | None = None,
+                        timeout_ms: int | None = None, auth_ctx: str | None = None,
+                        expected_session: str | None = None) -> dict:
+    """Download ``url`` THROUGH THE BROWSER; answer ``{ok, path, bytes, mime, state, final_url}``.
+
+    FIXED-FUNCTION like :func:`navigate_tab`: ``url`` is DATA handed to ``chrome.downloads.download``,
+    never source spliced into a page eval — so this verb is NOT behind the execute_js checkbox, has
+    NO ``js_audit`` row and is not in ``_AUDITED_COMMANDS`` (there is no checkbox and nothing to
+    reconstruct). It IS gated by the stop switch here (:func:`_ensure_not_paused`), like every verb
+    that reaches the browser, and it carries the extension's http/https edge guard — a non-http url
+    is ``precondition_failed`` and nothing is downloaded.
+
+    WHY ``chrome.downloads`` and not ``curl``: the MCP server runs REMOTELY (a container on nebula)
+    while the extension — and the laptop's disk — are elsewhere, so the server cannot write the file
+    locally, and streaming the bytes back through the MCP result would dump megabytes into the
+    agent's context. ``chrome.downloads`` is the only path that lands the bytes on the laptop: it
+    fetches ``url`` in the chosen instance's SESSION (its cookies, which is what gets past the
+    403 / anti-bot a plain ``curl`` hits) and writes the file into the browser's own download
+    directory. The answer is the on-disk ``path``; the agent then moves the file into its project.
+
+    HONEST LIMITS: it uses the instance's session cookies but does NOT run page JS, so a file that
+    only an in-page script can produce (a blob assembled in the DOM) is out of scope. A download
+    that overruns ``timeout_ms`` returns a DEFINITE failure (``precondition_failed``) while the
+    browser may keep downloading it — the verb never hangs and never cancels the transfer.
+    """
+    await _ensure_not_paused(app)
+    # An omitted timeout means "the ceiling", the same choice wait_for / navigate_tab make: a
+    # download with no stated length wants the longest the operator permits, not the ordinary
+    # command budget.
+    wait_ms = _clamp_timeout_ms(app, timeout_ms)
+    if wait_ms is None:
+        wait_ms = app.state.settings.execute_js_max_timeout_ms
+    params: dict = {"url": url, "timeoutMs": wait_ms}
+    if filename is not None:
+        params["filename"] = filename
+    # The socket budget must OUTLAST the extension's own wait — the same ordering rule as
+    # navigate_tab / wait_for — else the command dies on the wire before the download's deadline.
+    budget = _wait_budget_ms(app, wait_ms)
+    result = await _command(app, instance, protocol.CMD_DOWNLOAD_FILE, params, auth_ctx=auth_ctx,
+                            expected_session=expected_session, cmd_timeout_ms=budget)
+    return {
+        "ok": True,
+        "path": result.get("path"),
+        "bytes": result.get("bytes"),
+        "mime": result.get("mime"),
+        "state": result.get("state"),
+        "final_url": result.get("finalUrl"),
+    }
+
+
 async def wake_tab(app, *, instance: str, tab_id: int, auth_ctx: str | None = None,
                    expected_session: str | None = None) -> dict:
     """Wake a DISCARDED tab (issue #68): reload it and wait for the page to load.

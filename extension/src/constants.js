@@ -147,6 +147,14 @@ export const CMD_FOCUS_TAB = "focus_tab";
 // Raise a window to the foreground by id, touching nothing inside it (§6).
 export const CMD_FOCUS_WINDOW = "focus_window";
 export const CMD_NAVIGATE_TAB = "navigate_tab";
+// Download a url THROUGH THE BROWSER (chrome.downloads) using the instance's session cookies —
+// which gets past the 403 / anti-bot a plain curl hits — and save it to the browser's download
+// dir, answering the on-disk path. FIXED-function like navigate_tab: `url` is DATA, never source
+// spliced into a page eval, so NO execute_js checkbox and NO js_audit row. It is still pause-gated
+// on the service side and carries the http/https edge guard, like every verb that reaches the
+// browser. The remote server cannot write the laptop's disk and bytes-over-MCP would bloat the
+// agent's context, so chrome.downloads is the only mechanism that lands the file locally.
+export const CMD_DOWNLOAD_FILE = "download_file";
 export const CMD_MERGE_WINDOWS = "merge_windows";
 export const CMD_EXECUTE_JS = "execute_js";
 // CDP twin of execute_js: run the code via a TRANSIENT chrome.debugger attach ->

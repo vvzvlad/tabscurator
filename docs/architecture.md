@@ -1205,6 +1205,7 @@ worker умирает через 30 с и внутренний таймер не
 | `get_tab` | `{tabId}` | `{tab}` / `no_such_tab` |
 | `focus_tab` | `{tabId}` | `{ok}` |
 | `navigate_tab` | `{tabId, url, waitUntil?, selector?, timeoutMs?}` | `{ok}` — без ожидания; `{ok, matched, elapsedMs}` — с ним |
+| `download_file` | `{url, filename?, timeoutMs}` | `{path, bytes, mime, finalUrl, state}` / `precondition_failed` — скачивание через браузер (`chrome.downloads`), `url` — данные, фикс-функция как `navigate_tab` (§12) |
 | `merge_windows` | `{windowIds?, targetWindowId?}` | `{merged: n}` — пустой объект только для ручной кнопки (§9) |
 | `move_tab` | `{tabId, windowId: int\|null, index?}` | `{tabId, windowId, index}` / `pinned_cross_window` / `no_window` |
 | `execute_js` | `{code, tabId?, world?, awaitPromise?}` | `{results}` / `js_disabled` |
@@ -1297,6 +1298,23 @@ SPA/React-кнопки реагируют. Работает на страниц�
 (accounts.spotify.com), потому что инъекция `chrome.scripting` не подчинена `script-src` страницы.
 **Отключённый** контрол — `precondition_failed` (клик по нему — молчаливый no-op, честнее
 отказать); селектор, не нашедший элемента или не разобравшийся, — тоже `precondition_failed`.
+
+**`download_file` — фиксированный, скачивание через браузер (двойник `navigate_tab`).** Качает
+`url` через `chrome.downloads` в сессии инстанса (его куки — то, что проходит мимо 403/антибота,
+на который натыкается голый `curl`) и кладёт файл в каталог загрузок браузера, отвечая путём на
+диске. `url` — **данные** для `chrome.downloads.download`, исходником в eval не становится, поэтому
+верб **фиксированный**: галочки `execute_js` не требует, строку `js_audit` не пишет и в
+`_AUDITED_COMMANDS` не входит, ровно как `navigate_tab`. На сервисе — **под стоп-гейтом**
+(`_ensure_not_paused`), на краю — тот же http/https-гард (не-http `url` → `precondition_failed`,
+ничего не качается). **Почему `chrome.downloads`, а не `curl`:** сервис живёт на инфре (§3), а не
+рядом с браузером, — чужой диск он не пишет, а гнать байты через результат MCP раздуло бы контекст
+агента; `chrome.downloads` — единственный путь, кладущий файл на ноутбук, откуда агент его забирает.
+Ожидание **событийное**: старт загрузки, затем первый `onChanged` с `state.current` =
+`complete`/`interrupted` для этого id, гонкой с дедлайном `timeoutMs`; слушатель снимается всегда.
+Дедлайн, дошедший без завершения, — **определённый** отказ (`precondition_failed`): загрузку верб
+**не отменяет** (браузер может докачивать), но и не висит. **Честный предел:** сессию инстанса
+использует, но код страницы **не** исполняет — файл, собираемый только in-page скриптом (blob в
+DOM), вне охвата.
 
 **`set_focus_emulation` — первый верб через `chrome.debugger` (§12).** Переключает
 `Emulation.setFocusEmulationEnabled`: фоновая вкладка ведёт себя как в фокусе и на экране
