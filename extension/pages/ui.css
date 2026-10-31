@@ -297,6 +297,11 @@ code {
   cursor: default;
 }
 
+/* The popup's "Разметить страницу" sits above the rule form's title. */
+#tack {
+  margin: 0 0 16px;
+}
+
 .ui-checkbox {
   display: flex;
   align-items: center;
