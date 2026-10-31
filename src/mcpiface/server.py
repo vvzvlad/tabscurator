@@ -88,6 +88,8 @@ INSTRUCTIONS = (
     "it.\n\n"
     "Hundreds of calls against one site on the user's account only after the user said yes "
     "to your estimate of the volume. A paid generator: one sample first, show it, then ask.\n\n"
+    "Notes the owner leaves on web pages with the Tack toolbar arrive through "
+    "list_page_notes: apply them, then close them with mark_page_notes_done.\n\n"
     "Avito (messenger, orders, listings search): the reference is docs/avito.md in the "
     "tabscurator repo, "
     "https://gitea.vvzvlad.xyz/projects/tabscurator/src/branch/develop/docs/avito.md — a "
@@ -873,6 +875,24 @@ def build_mcp(app_ref) -> MCPServer:
             instance_to=instance_to, auth_ctx=current_mcp_session(),
             expected_session_from=expected_session_from,
         ))
+
+    # --- page notes left with Tack (§16 item 26) ------------------------------
+    @mcp.tool()
+    async def list_page_notes(include_done: bool = False,
+                              url_contains: str | None = None) -> dict:
+        """Notes the owner left on web pages with the Tack toolbar, oldest first. Each
+        ``md`` is one Tack Markdown export of the notes sent from that page, ``count`` how
+        many it holds. Done notes are hidden unless ``include_done``; ``url_contains`` is a
+        case-insensitive substring of the page url."""
+        return await _guarded(tools.list_page_notes(
+            _host(), include_done=include_done, url_contains=url_contains,
+        ))
+
+    @mcp.tool()
+    async def mark_page_notes_done(ids: list[int]) -> dict:
+        """Close the notes you applied (sets ``done_at``); ``marked`` counts the ones that
+        were still open."""
+        return await _guarded(tools.mark_page_notes_done(_host(), ids=ids))
 
     # --- pass + pause --------------------------------------------------------
     @mcp.tool()

@@ -4,8 +4,8 @@ Every value comes from the environment (or `.env`); nothing is hardcoded. The
 table below mirrors §4 "Конфигурация (ENV)" of docs/architecture.md verbatim:
 non-secret tunables carry the §4 defaults, self-hosted/infra paths carry a
 dev-friendly default under data/, and the two tokens (ADMIN_TOKEN, METRICS_TOKEN)
-are REQUIRED with no default and reject an empty/blank string as well as a missing
-variable (§4: "обязателен, пустой = отказ старта").
+and GROQ_API_KEY are REQUIRED with no default and reject an empty/blank string as well
+as a missing variable (§4: "обязателен, пустой = отказ старта").
 """
 
 from pydantic import Field, field_validator
@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # and ADMIN_TOKEN must DIFFER from it. Both are validated below.
     metrics_token: str = Field(min_length=1)
     admin_token: str = Field(min_length=1)
+    # The Groq key POST /api/transcribe sends to Whisper to turn a voice note into text
+    # (§16 item 26). Required like the tokens: a voice note is part of the page-notes
+    # feature, and a missing key would surface only as a 502 at the first recording.
+    groq_api_key: str = Field(min_length=1)
 
     # --- §4 tunables (non-secret): defaults are the architecture's numbers -------
     idle_minutes: int = 60
@@ -158,7 +162,7 @@ class Settings(BaseSettings):
         # whitespace-only value) to the same word an unset variable gives.
         return v.strip() or UNKNOWN_REVISION
 
-    @field_validator("metrics_token", "admin_token")
+    @field_validator("metrics_token", "admin_token", "groq_api_key")
     @classmethod
     def _reject_blank_token(cls, v: str) -> str:
         # Field(min_length=1) already rejects a missing var and the empty string,

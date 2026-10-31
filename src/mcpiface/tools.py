@@ -17,6 +17,7 @@ command, pass or pause logic — the handlers only call the reused functions:
   close cannot be completed (the pass's phase B / reconcile finishes it later)
 * run_pass  -> :func:`src.curator.runner.run_pass`
 * pause     -> :mod:`src.curator.pause` (settings write + ``lease.bump_epoch``)
+* page notes -> :mod:`src.db.page_notes`
 
 §12: a stopped system REFUSES mutating verbs. Reads and ``pause`` / ``resume`` are
 never gated; ``run_pass`` handles the stop itself (a dry_run is never muted — looking
@@ -43,6 +44,7 @@ from src.api.freshness import ERROR, ensure_fresh
 from src.curator import pause as pause_ops
 from src.curator import runner
 from src.db import state as state_read
+from src.db import page_notes as page_notes_db
 from src.db.actions import insert_action, normalize_url, set_action_status
 from src.db.settings_store import get_setting
 from src.db.tab_leases import get_tab_lease, upsert_tab_lease
@@ -2568,6 +2570,29 @@ async def _carry_lease(app, instance: str, tab_id: int, url: str) -> dict:
     if held is None or held["until"] <= _now_ms():
         return {}
     return {"lease": await _write_open_lease(app, instance, url, held["until"])}
+
+
+# --- page notes left with Tack (§16 item 26) ---------------------------------
+async def list_page_notes(app, *, include_done: bool = False,
+                          url_contains: str | None = None) -> dict:
+    """Stored Tack exports, oldest first; open ones only unless ``include_done``. A plain
+    DB read, so the stop does not gate it (like ``list_exemptions``)."""
+    notes = await app.state.db.read(
+        lambda c: page_notes_db.list_page_notes(c, bool(include_done), url_contains)
+    )
+    return {"ok": True, "notes": notes}
+
+
+async def mark_page_notes_done(app, *, ids: list[int]) -> dict:
+    """Set ``done_at`` on the given notes; ``marked`` counts the ones that were still open.
+    A state write, so it is refused while the curator is stopped, like the exemption
+    writers (§12)."""
+    await _ensure_not_paused(app)
+    now = _now_ms()
+    marked = await app.state.db.write(
+        lambda c: page_notes_db.mark_page_notes_done(c, list(ids), now)
+    )
+    return {"ok": True, "marked": marked}
 
 
 # --- pass + stop/start -------------------------------------------------------

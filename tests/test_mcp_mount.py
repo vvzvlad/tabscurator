@@ -125,6 +125,8 @@ def test_mcp_tools_list_exposes_every_phase11_tool(tmp_path):
         "start_ws_capture", "read_ws_frames", "stop_ws_capture",
         # screenshot: the picture twin of get_text (hybrid cheap/debugger capture).
         "screenshot",
+        # Page notes left with Tack (§16 item 26): read them, close the applied ones.
+        "list_page_notes", "mark_page_notes_done",
     }
     with TestClient(app) as client:
         r = client.post("/mcp", json=_init_body(), headers=_headers())
@@ -146,6 +148,7 @@ def test_mcp_initialize_hands_out_instructions_naming_real_tools(tmp_path):
     referenced_tools = {
         "list_tabs", "list_windows", "list_instances", "get_text", "execute_js",
         "wake_tab", "set_focus_emulation", "start_js", "poll_job",
+        "list_page_notes", "mark_page_notes_done",
     }
     app = create_app(_settings(tmp_path))
     with TestClient(app) as client:

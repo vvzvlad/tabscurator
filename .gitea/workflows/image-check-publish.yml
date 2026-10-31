@@ -40,6 +40,7 @@ jobs:
       env:
         METRICS_TOKEN: test-metrics-token   # required ENV so importing settings works
         ADMIN_TOKEN: test-admin-token       # required + must differ from METRICS_TOKEN (§13)
+        GROQ_API_KEY: test-groq-key         # required ENV; tests mock the Groq call
       run: pytest --tb=short -q
 
     # The alert rules (§12) are validated in the test job, not a job of their own, so

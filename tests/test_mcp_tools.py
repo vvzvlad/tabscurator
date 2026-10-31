@@ -20,6 +20,7 @@ from src.api import exemptions as exemptions_api
 from src.curator import lease
 from src.curator import pause as pause_ops
 from src.db import state as state_read
+from src.db import page_notes as page_notes_db
 from src.db.access import Database
 from src.db.audit import insert_js_audit  # noqa: F401  (schema presence)
 from src.db.settings_store import get_setting, set_setting
@@ -3259,6 +3260,51 @@ async def test_list_exemptions_can_be_scoped_to_one_instance(tmp_path):
     await tools.set_exemption(app, instance="media", url="https://b/", ttl_s=60)
     out = await tools.list_exemptions(app, instance="media")
     assert [e["url"] for e in out["exemptions"]] == ["https://b/"]
+
+
+# --- page notes left with Tack (§16 item 26) ----------------------------------
+async def _note(db, url, created_at=1):
+    return await db.write(lambda c: page_notes_db.insert_page_note(
+        c, "main", url, "T", f"# {url}", 2, created_at))
+
+
+async def test_list_and_mark_page_notes_round_trip(tmp_path):
+    db = await _make_db(tmp_path)
+    app = _app(db)
+    first = await _note(db, "https://App.test/x", created_at=1)
+    await _note(db, "https://b.test/50%_off", created_at=2)
+
+    listed = await tools.list_page_notes(app)
+    assert listed["ok"] is True
+    assert listed["notes"][0] == {
+        "id": first, "instance": "main", "url": "https://App.test/x", "title": "T",
+        "count": 2, "created_at": 1, "done_at": None, "md": "# https://App.test/x",
+    }
+    assert [n["url"] for n in listed["notes"]] == ["https://App.test/x", "https://b.test/50%_off"]
+    # Case-insensitive, and `%` / `_` are literal characters, not LIKE wildcards.
+    assert [n["id"] for n in (await tools.list_page_notes(app, url_contains="app.TEST"))["notes"]] == [first]
+    assert len((await tools.list_page_notes(app, url_contains="%_"))["notes"]) == 1
+    assert (await tools.list_page_notes(app, url_contains="5%x"))["notes"] == []
+
+    assert await tools.mark_page_notes_done(app, ids=[first]) == {"ok": True, "marked": 1}
+    assert [n["url"] for n in (await tools.list_page_notes(app))["notes"]] == ["https://b.test/50%_off"]
+    done_at = (await tools.list_page_notes(app, include_done=True))["notes"][0]["done_at"]
+    assert done_at is not None
+    # A repeat (and an unknown id) changes nothing: done_at stays the first close.
+    assert (await tools.mark_page_notes_done(app, ids=[first, 999]))["marked"] == 0
+    assert (await tools.list_page_notes(app, include_done=True))["notes"][0]["done_at"] == done_at
+
+
+async def test_mark_page_notes_done_is_refused_while_stopped(tmp_path):
+    db = await _make_db(tmp_path)
+    app = _app(db)
+    note_id = await _note(db, "https://a.test/")
+    await tools.pause(app)
+    with pytest.raises(tools.ToolError) as ei:
+        await tools.mark_page_notes_done(app, ids=[note_id])
+    assert ei.value.code == "stopped"
+    # Reading is never gated.
+    assert (await tools.list_page_notes(app))["notes"][0]["done_at"] is None
 
 
 # --- open_tab lease ----------------------------------------------------------

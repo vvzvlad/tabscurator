@@ -463,7 +463,7 @@ def test_step7_adds_tab_leases_keyed_by_instance_and_tab(tmp_path):
         )
         conn.commit()
 
-        result = migrate(conn, db, backups)  # applies step 7 (head)
+        result = migrate(conn, db, backups)  # applies step 7 and every later one
         assert result.ok and not result.degraded
         assert _version(conn) == MAX_VERSION
         assert _columns(conn, "tab_leases") == {"instance_id", "tab_id", "leased_at", "until"}
@@ -476,6 +476,36 @@ def test_step7_adds_tab_leases_keyed_by_instance_and_tab(tmp_path):
             conn.execute(
                 "INSERT INTO tab_leases (instance_id, tab_id, leased_at, until) "
                 "VALUES ('main', 7, 3, 4)"
+            )
+    finally:
+        conn.close()
+
+
+def test_step8_adds_page_notes_open_until_marked_done(tmp_path):
+    """Tack exports land in ``page_notes``; a fresh row is open (``done_at`` NULL) and the
+    NOT NULL columns refuse a row without them."""
+    db = str(tmp_path / "curator.db")
+    backups = str(tmp_path / "backups")
+    conn = _open(db)
+    try:
+        migrate(conn, db, backups, steps=STEPS[:7], max_version=7)
+        assert "page_notes" not in _tables(conn)
+
+        result = migrate(conn, db, backups)  # applies step 8 (head)
+        assert result.ok and not result.degraded
+        assert _version(conn) == MAX_VERSION
+        assert _columns(conn, "page_notes") == {
+            "id", "instance_id", "url", "title", "md", "count", "created_at", "done_at",
+        }
+        conn.execute(
+            "INSERT INTO page_notes (instance_id, url, title, md, count, created_at) "
+            "VALUES ('main', 'https://a/', 'A', '# notes', 2, 1)"
+        )
+        assert conn.execute("SELECT id, done_at FROM page_notes").fetchone() == (1, None)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO page_notes (instance_id, url, title, count, created_at) "
+                "VALUES ('main', 'https://a/', 'A', 2, 1)"
             )
     finally:
         conn.close()

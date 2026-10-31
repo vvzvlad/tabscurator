@@ -307,6 +307,26 @@ _V7_STATEMENTS: list[str] = [
     """,
 ]
 
+# --- Version 8: page notes left with Tack (§16 item 26) ----------------------
+# One row per "Send to agent" from the Tack toolbar the extension injects into a page:
+# ``md`` is Tack's whole Markdown export, ``count`` how many notes it holds. Claude reads open rows through the MCP
+# ``list_page_notes`` and closes them with ``mark_page_notes_done``, which sets
+# ``done_at``; NULL means not applied yet.
+_V8_STATEMENTS: list[str] = [
+    """
+    CREATE TABLE page_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT NOT NULL,
+        md TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        done_at INTEGER
+    )
+    """,
+]
+
 # Ordered list of steps. Append new steps with the next target_version and bump
 # MAX_VERSION; never edit a shipped step (a migrated DB has already run it).
 STEPS: list[tuple[int, list[str]]] = [
@@ -317,6 +337,7 @@ STEPS: list[tuple[int, list[str]]] = [
     (5, _V5_STATEMENTS),
     (6, _V6_STATEMENTS),
     (7, _V7_STATEMENTS),
+    (8, _V8_STATEMENTS),
 ]
 
 MAX_VERSION: int = max(target for target, _ in STEPS)

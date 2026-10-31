@@ -44,6 +44,7 @@ from src.api.exemptions import create_exemption, delete_exemption, list_exemptio
 from src.api.guards import require_operational
 from src.api.instances import merge_windows_endpoint
 from src.api.metrics import metrics
+from src.api.page_notes import create_page_note, transcribe
 from src.api.pause import pause_endpoint, resume_endpoint
 from src.api.quick_links import quick_links_ops
 from src.api.restore import restore_action
@@ -217,6 +218,10 @@ def create_app(settings) -> Starlette:
         Route("/api/focus", focus, methods=["POST"]),
         # Quick links offline op queue flush (§10): array of ops + Idempotency-Key.
         Route("/api/quick_links/ops", quick_links_ops, methods=["POST"]),
+        # Page notes left with Tack (§16 item 26): the extension's "Send to agent" stores
+        # an export, and a voice note is turned into text through Groq Whisper.
+        Route("/api/page_notes", create_page_note, methods=["POST"]),
+        Route("/api/transcribe", transcribe, methods=["POST"]),
         # Archive list (§10): filtered, deferred hidden by default, newest-first.
         Route("/api/actions", list_actions, methods=["GET"]),
         Route(

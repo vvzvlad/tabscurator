@@ -187,6 +187,9 @@ dies — it keeps rendering «кэш от <время>» that never updates. Tha
   REQUIRED and must DIFFER; an empty value fails startup (§4). There is **no shared /ext
   token** — instances authenticate by a per-install secret entered during enrollment
   (§7).
+- **`GROQ_API_KEY`** — the Groq key `POST /api/transcribe` uses to turn a voice note left
+  with Tack into text (Whisper). REQUIRED; an empty value fails startup (§4). The
+  container calls `https://api.groq.com` directly.
 - **One volume**, `curator` → `/app/data`, holding **all** mutable state (the project
   convention is "all mutable state goes under `data/`"):
   - `/app/data/curator.db` (+ WAL) — the DB;

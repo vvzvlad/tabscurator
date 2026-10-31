@@ -21,7 +21,7 @@ tabs to their "home" instance by `pattern → instance` rules. The design spec i
 All routine actions go through the `Makefile` (`make help`). Python always runs in the
 local `.venv` that `make` creates.
 ```bash
-make env               # .env from .env.example (METRICS_TOKEN, ADMIN_TOKEN)
+make env               # .env from .env.example (METRICS_TOKEN, ADMIN_TOKEN, GROQ_API_KEY)
 make test              # pytest
 make run               # python main.py
 make alerts            # promtool check + test rules (skips if promtool is missing, fails under CI=true)

@@ -138,6 +138,19 @@ def test_admin_token_equal_to_metrics_fails_at_startup(monkeypatch):
     assert any(err["loc"] == ("admin_token",) for err in ei.value.errors())
 
 
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_groq_api_key_is_required_like_the_tokens(monkeypatch, value):
+    # Missing, empty or blank all fail at startup and name the variable.
+    _base_env(monkeypatch)
+    if value is None:
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("GROQ_API_KEY", value)
+    with pytest.raises(ValidationError) as ei:
+        Settings(_env_file=None)
+    assert any(err["loc"] == ("groq_api_key",) for err in ei.value.errors())
+
+
 def test_enroll_window_min_default_and_override(monkeypatch):
     _base_env(monkeypatch)
     assert Settings(_env_file=None).enroll_window_min == 10

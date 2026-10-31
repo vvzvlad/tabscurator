@@ -47,6 +47,9 @@ services:
       # during enrollment, not by any value set here.
       METRICS_TOKEN: YYY
       ADMIN_TOKEN: ZZZ
+      # Groq key for voice-note transcription (POST /api/transcribe). REQUIRED — an empty
+      # value fails startup (§4).
+      GROQ_API_KEY: XXX
       # Backups live INSIDE the single volume, under the DB directory. They therefore
       # share free space with the DB — `curator-backup-stale` is what tells you the
       # nightly copy stopped landing (DEPLOY.md §5).

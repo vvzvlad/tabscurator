@@ -2,10 +2,11 @@ import os
 
 # Provide the required tokens BEFORE any test module imports src.settings
 # (Settings() is instantiated at import time and would otherwise fail because
-# METRICS_TOKEN / ADMIN_TOKEN have no default). In CI the same variables are
-# injected via the workflow's `env:` block.
+# METRICS_TOKEN / ADMIN_TOKEN / GROQ_API_KEY have no default). In CI the same variables
+# are injected via the workflow's `env:` block.
 os.environ.setdefault("METRICS_TOKEN", "test-metrics-token")
 os.environ.setdefault("ADMIN_TOKEN", "test-admin-token")
+os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
 
 import hashlib  # noqa: E402
 import sqlite3  # noqa: E402
@@ -16,6 +17,7 @@ import pytest  # noqa: E402
 
 METRICS_TOKEN = "test-metrics-token"
 ADMIN_TOKEN = "test-admin-token"
+GROQ_API_KEY = "test-groq-key"
 
 # --- THE settings surface for tests ------------------------------------------
 # One shared settings object: a field missing from a hand-rolled fixture surfaces as an
@@ -29,6 +31,7 @@ _DEFAULTS: dict = {
     # tokens / transport
     "metrics_token": METRICS_TOKEN,
     "admin_token": ADMIN_TOKEN,
+    "groq_api_key": GROQ_API_KEY,
     "protocol_version": 1,
     "host": "0.0.0.0",
     "port": 8000,
