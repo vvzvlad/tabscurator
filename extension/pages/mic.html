@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tabs Curator — microphone</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body class="ui-popup">
+    <main class="ui-page">
+      <h1 class="ui-title">Microphone for voice notes</h1>
+      <!--
+        "Allow this time" is a one-time grant that lapses once the origin's tabs are closed,
+        and this tab closes itself on success; the hidden recorder asks later.
+      -->
+      <p class="ui-subtitle">
+        The browser asks for the microphone now. Choose “Allow while visiting the site”:
+        Tack voice notes are recorded by the extension, not by the page you annotate.
+      </p>
+      <p class="ui-status" id="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="mic.js" type="module"></script>
+  </body>
+</html>

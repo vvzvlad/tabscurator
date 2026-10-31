@@ -20,6 +20,13 @@ import { chromeEnv, Connection } from "./connection.js";
 import { handleDebuggerDetach, handleDebuggerEvent } from "./commands.js";
 import { enqueueOp, flushQueue } from "./quicklinks.js";
 import {
+  TACK_PAGE_TYPES,
+  activateTack,
+  chromeTackEnv,
+  handleTackPageMessage,
+  isContentScript,
+} from "./tack-bridge.js";
+import {
   TICK_MS,
   RECONNECT_ALARM,
   TICK_ALARM,
@@ -64,6 +71,21 @@ function quickLinksEnv() {
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
   };
+}
+
+// Page notes env (§16 item 26): the same /api credential as quick links.
+function tackEnv() {
+  return chromeTackEnv(
+    chrome,
+    async () => {
+      await connection.init();
+      return {
+        serviceUrl: await connection._resolveAddress(),
+        secret: await connection._apiSecret(),
+      };
+    },
+    (...a) => fetch(...a),
+  );
 }
 
 // --- tab / window activity events (§5 table) -------------------------------
@@ -179,8 +201,26 @@ flushQueue(quickLinksEnv()).catch((e) =>
 // --- internal page <-> SW interface (§6) -----------------------------------
 // The startpage/options talk to the SW via runtime.sendMessage: identity,
 // connection state, and the quick-links op queue.
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
+  // A website's frame (the Tack relay is a content script there) gets the tack_* page
+  // requests and nothing else — never the credential — and those requests are taken from
+  // nowhere else.
+  if (isContentScript(sender, chrome.runtime.getURL(""))) {
+    if (!TACK_PAGE_TYPES.has(message.type)) return false;
+    handleTackPageMessage(tackEnv(), message).then(sendResponse);
+    return true; // async response
+  }
+  if (message.type === "tack_activate") {
+    // «📌 Разметить страницу» in the popup: Tack + relay into the tab it was pressed on.
+    activateTack(tackEnv(), message.tabId)
+      .then(sendResponse)
+      .catch((e) => {
+        console.error("[ext] tack_activate failed:", e);
+        sendResponse({ ok: false, error: String((e && e.message) || e) });
+      });
+    return true; // async response
+  }
   if (message.type === "get_identity") {
     // Identity moved off instance.json (§7): the id is SERVER-assigned — learned from
     // `enroll_accepted` (and re-confirmed by every hello_ack) and stored durably, so a

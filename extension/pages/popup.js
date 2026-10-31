@@ -216,6 +216,16 @@ export async function getActiveTab(chromeApi) {
   return tabs && tabs[0];
 }
 
+// «📌 Разметить страницу» (§16 item 26): the worker injects Tack into this tab; the popup
+// closes so the page is what the human sees next. A refusal (a chrome:// tab cannot be
+// scripted) stays on screen instead.
+export async function activateTack(chromeApi, win) {
+  const tab = await getActiveTab(chromeApi);
+  const res = await chromeApi.runtime.sendMessage({ type: "tack_activate", tabId: tab && tab.id });
+  if (!res || !res.ok) throw new Error((res && res.error) || "the extension did not answer");
+  win.close();
+}
+
 // What the human is supposed to DO about a refused save. The server's own sentence
 // says what went wrong; these say where the fix lives, so nobody has to go and ask.
 export function saveFailureHint(status) {
@@ -363,6 +373,16 @@ export async function init(doc, chromeApi, fetchFn) {
   const setLabel = (t) => {
     if (els.save) els.save.textContent = t;
   };
+
+  // Wired before the rule context loads: page notes do not depend on it.
+  const tackBtn = doc.getElementById("tack");
+  if (tackBtn) {
+    tackBtn.addEventListener("click", () =>
+      activateTack(chromeApi, doc.defaultView).catch((e) =>
+        setStatus("Cannot put Tack on this tab: " + (e && e.message)),
+      ),
+    );
+  }
 
   let base, token, ownInstanceId, tabRule;
   try {

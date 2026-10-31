@@ -782,3 +782,34 @@ describe("loadPopupContext (§7)", () => {
     await expect(loadPopupContext(unset)).rejects.toThrow(/no service address is configured/i);
   });
 });
+
+// --- «📌 Разметить страницу» (§16 item 26) ------------------------------------
+describe("the page-notes button", () => {
+  function tackDoc(sendMessage) {
+    const doc = fakeDoc();
+    doc.els.tack = fakeEl("button");
+    doc.defaultView = { close: vi.fn() };
+    const chromeApi = { runtime: { sendMessage }, tabs: { query: async () => [{ id: 31, url: "chrome://x" }] } };
+    return { doc, chromeApi };
+  }
+
+  it("asks the worker to put Tack on THIS tab, then closes the popup", async () => {
+    const sendMessage = vi.fn(async (msg) => (msg.type === "tack_activate" ? { ok: true } : null));
+    const { doc, chromeApi } = tackDoc(sendMessage);
+    // A chrome:// tab cannot hold a rule, so init stops early — the button still works.
+    await init(doc, chromeApi, vi.fn());
+    await doc.els.tack._click();
+    expect(sendMessage).toHaveBeenCalledWith({ type: "tack_activate", tabId: 31 });
+    expect(doc.defaultView.close).toHaveBeenCalled();
+  });
+
+  it("a refused injection stays on screen and the popup stays open", async () => {
+    const { doc, chromeApi } = tackDoc(async (msg) =>
+      msg.type === "tack_activate" ? { ok: false, error: "Cannot access a chrome:// URL" } : null,
+    );
+    await init(doc, chromeApi, vi.fn());
+    await doc.els.tack._click();
+    expect(doc.els.status.textContent).toBe("Cannot put Tack on this tab: Cannot access a chrome:// URL");
+    expect(doc.defaultView.close).not.toHaveBeenCalled();
+  });
+});

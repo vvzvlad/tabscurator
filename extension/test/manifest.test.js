@@ -20,8 +20,16 @@ describe("manifest permissions (§10 startpage columns)", () => {
       // `debugger` is the chrome.debugger (CDP) path — set_focus_emulation and later slices
       // (§12), gated at the edge by the single JS & Debugger checkbox. `downloads` backs the
       // `download_file` verb (§6) and adds a "Manage your downloads" line to the install prompt.
-      ["alarms", "bookmarks", "debugger", "downloads", "history", "idle", "scripting", "storage", "tabs"].sort(),
+      // `offscreen` is the hidden document that records Tack voice notes (§16 item 26).
+      [
+        "alarms", "bookmarks", "debugger", "downloads", "history", "idle", "offscreen",
+        "scripting", "storage", "tabs",
+      ].sort(),
     );
+  });
+
+  it("the //permissions comment says what offscreen is for", () => {
+    expect(manifest["//permissions"]).toMatch(/`offscreen` backs Tack voice notes/);
   });
 
   it("the //permissions comment says why bookmarks/history are here and what they cost", () => {

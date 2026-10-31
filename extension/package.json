@@ -1,6 +1,6 @@
 {
   "name": "tabscurator-extension",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Browser (MV3) side of tabscurator: activity map, tick, snapshot build, /ext connection.",
@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "happy-dom": "20.11.1",
     "vitest": "^2.1.9"
   }
 }

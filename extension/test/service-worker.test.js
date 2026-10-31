@@ -39,6 +39,9 @@ function routedFetch(routes = {}) {
     if (u.includes("/api/quick_links/ops")) {
       return { ok: true, json: async () => ({ ok: true, quick_links: [] }) };
     }
+    if (u.includes("/api/page_notes")) {
+      return { ok: true, status: 201, text: async () => JSON.stringify({ id: 11 }) };
+    }
     throw new Error("unrouted fetch " + u);
   });
   return { fn, calls };
@@ -296,6 +299,65 @@ describe("enrollment message channel (§7)", () => {
     const facts = (await chrome.storage.local.get("enrollState")).enrollState;
     expect(facts.requestPending).toBe(true);
     expect((await chrome.storage.local.get("instanceSecret")).instanceSecret).toBeTruthy();
+  });
+});
+
+// --- §16 item 26: what a website frame (the Tack relay) may ask the worker ----
+describe("Tack page requests: routed by sender", () => {
+  const PAGE = { tab: { id: 3 }, url: "http://localhost:5299/", id: "mock-id" };
+  const POPUP = { url: "chrome-extension://mock-id/pages/popup.html", id: "mock-id" };
+  function send(message, sender) {
+    const listener = chrome.runtime.onMessage.listeners[0];
+    let reply;
+    const answered = new Promise((resolve) => (reply = resolve));
+    const async = listener(message, sender, reply);
+    return { async, answered };
+  }
+
+  it("a website frame never gets the credential", async () => {
+    await loadServiceWorker();
+    const { async } = send({ type: "get_credential" }, PAGE);
+    expect(async).toBe(false); // not handled: the relay can never route this
+    // Positive control: the same message from an extension page IS answered.
+    const ok = send({ type: "get_credential" }, POPUP);
+    expect(ok.async).toBe(true);
+    expect((await ok.answered).secret).toBe(SECRET_HEX);
+  });
+
+  it("tack_send from a website frame posts the notes with the instance Bearer", async () => {
+    const { fetchCalls } = await loadServiceWorker();
+    const msg = { type: "tack_send", url: "http://localhost:5299/", title: "T", md: "# n", count: 1 };
+    const { async, answered } = send(msg, PAGE);
+    expect(async).toBe(true);
+    expect(await answered).toEqual({ ok: true, id: 11 });
+    const post = fetchCalls.find((c) => c.url.includes("/api/page_notes"));
+    expect(post.url).toBe("https://host.example/api/page_notes");
+    expect(post.opts.headers.Authorization).toBe("Bearer " + SECRET_HEX);
+  });
+
+  it("tack_send from an extension page is not taken (page requests come from pages only)", async () => {
+    const { fetchCalls } = await loadServiceWorker();
+    expect(send({ type: "tack_send", md: "x" }, POPUP).async).toBe(false);
+    expect(fetchCalls.some((c) => c.url.includes("/api/page_notes"))).toBe(false);
+  });
+
+  it("tack_activate from the popup injects into the tab it names", async () => {
+    await loadServiceWorker();
+    chrome.__state.tabs.push({ id: 9, url: "http://localhost:5299/" });
+    const seen = [];
+    const real = chrome.scripting.executeScript;
+    chrome.scripting.executeScript = async (inj) => {
+      seen.push(inj);
+      return real(inj);
+    };
+    const { async, answered } = send({ type: "tack_activate", tabId: 9 }, POPUP);
+    expect(async).toBe(true);
+    expect(await answered).toEqual({ ok: true });
+    expect(seen.map((i) => [i.target.tabId, i.world])).toEqual([
+      [9, "MAIN"], [9, "MAIN"], [9, "ISOLATED"], [9, "MAIN"],
+    ]);
+    // ...and a website frame cannot trigger an injection.
+    expect(send({ type: "tack_activate", tabId: 9 }, PAGE).async).toBe(false);
   });
 });
 
